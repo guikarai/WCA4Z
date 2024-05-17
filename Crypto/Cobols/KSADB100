@@ -1,0 +1,1568 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID.    "KSADB100".
+      *****************************************************************
+      *                                                               *
+      * DKMSAPI HELPER PROGRAM - KSADB100                             *
+      *                                                               *
+      * Return detailed information why no row(s) was retrieved       *
+      * when fetching a UKDS7 key from a key set                      *
+      * (SQLCODE = 100)                                               *
+      *                                                               *
+      * Return 04/100                                                 *
+      * - Keyset does not exist or is not active                      *
+      *                                                               *
+      * return:                                                       *
+      * 101 = INDEX case                                              *
+      * 108 = DEFAULT case                                            *
+      * 109 = NO INDEX case                                           *
+      *                                                               *
+      * reason:                                                       *
+      * 1= Key set does not contain key type                          *
+      * 2= Key set does not contain key type for index (default/any)  *
+      * 3= Key in key set not found in UKDS7 or inactive              *
+      * 4= Key in key set does not have requested keymaterial type    *
+      * 5= Key in key set has DateActive > req. date (not active yet) *
+      * 6= Key in key set has DateExpiry <= req. date (key expired)   *
+      * 7= Key in key set has DateExpiryLow (or DateActive if no Low) *
+      *              > req. card expire date                          *
+      * 8= Key in key set has DateExpiry <= req. card expire date     *
+      *                                                               *
+      * Note: (just maybe)                                            *
+      * Idea for better solution reporting multiple keys.             *
+      * - after check of successful keys exists do:                   *
+      *   execute fetch cursor of all UKDS7 keys (order by DateExpiry)*
+      * Then travel through all fetched keys and report the key       *
+      * with most success (fails on the latest check above)           *
+      *                                                               *
+      *****************************************************************
+      * CHANGE LOG                                                    *
+      *****************************************************************
+      * Version 03.00.00           2017-01-03            Erik Pauner  *
+      *                                                               *
+      * Change debug messages so the every SQL test is displayed as   *
+      * PASSED or FAILED                                              *
+      *****************************************************************
+      * Version 02.07.00           2016-07-04            Erik Pauner  *
+      *                                                               *
+      * Add timezone to timestamp from UKDS7 XML                      *
+      *****************************************************************
+      * Version 02.06.00           2016-03-30            Erik Pauner  *
+      *                                                               *
+      * For reason code 4, then add the OR ISS-PRIV so that           *
+      * RSA-GET will not get 101/4 or 109/4 which can not be.         *
+      *****************************************************************
+      * Version 01.02.00           2014-09-11            Erik Pauner  *
+      *                                                               *
+      * Add DAPI-ERR-KSKEYNOIX-NOTFOUND return code                   *
+      * Remove unused cursors                                         *
+      *                                                               *
+      *****************************************************************
+      * Version 01.01.00           2014-08-13            Erik Pauner  *
+      *                                                               *
+      * Debug text 'KEY TYPE DEFINED IN KEY SET' duplicate            *
+      * 2. changed to 'KEY INDEX OK'                                  *
+      *                                                               *
+      *****************************************************************
+      * Version 01.00.00           2014-06-26            Erik Pauner  *
+      *                                                               *
+      * Initial release of program.                                   *
+      *                                                               *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+       DATA DIVISION.
+       FILE SECTION.
+
+       WORKING-STORAGE SECTION.
+
+       01 COPYRIGHT.
+          03 FILLER                      PIC X(154)
+                                                   VALUE
+                                  'Licenced Materials - Property of IBM
+      -                                             'DKMSAPI - KSADB100
+      -                            '(C) COPYRIGHT IBM CORP. 2013, 2017
+      -                                           'All Rights Reserved.
+      -                     'US Government Users Restricted Rights - '.
+          03 FILLER                      PIC X(100)
+                                                   VALUE
+                          'Use, duplication or disclosure restricted by
+      -                   'GSA ADP Schedule Contract with IBM Corp.  '.
+
+       01 PROGINFO.
+          03 THISPROGID                  PIC X(08) VALUE 'KSADB100'.
+          03 THISPROGVERSION             PIC X(06) VALUE '030000'.
+          03 THISAUTHOR                  PIC X(10) VALUE 'EAP/IBM-DK'.
+          03 CHANGEDATE                  PIC X(10) VALUE '2017-01-03'.
+
+       01 WS-DBUG                        PIC X(19)
+                                                   VALUE '**KSADB100 DEB
+      -                                                  'UG** '.
+
+       01 WS-SQL-AREA.
+          03 SQL-TODAY                   PIC X(10).
+          03 SQL-VDATE                   PIC X(10).
+          03 SQL-VDATE2                  PIC X(10).
+          03 WK-SQLCODE                  PIC 9(09) VALUE ZERO.
+          03 SQL-USAGE-S.
+             49 SQL-USAGE-S-LGT          PIC S9(4) COMP
+                                                   VALUE +3.
+             49 SQL-USAGE-S-DAT          PIC X(03) VALUE '%S%'.
+          03 SQL-PRIVATE-KEY             PIC X(64).
+          03 SQLCODE-SAVE                PIC 9(09) COMP.
+
+      * Internal copy for KSA-FND-KEY
+       01 WS-KSA-FND-KEY.
+          03 WS-KSA-FNDK-KEYSET-ID       PIC X(32).
+          03 WS-KSA-FNDK-KEY-TYPE        PIC X(08).
+          03 WS-KSA-FNDK-INDEX           PIC S9(04) COMP.
+          03 WS-KSA-FNDK-EXPIRY          PIC X(06).
+          03 WS-KSA-FNDK-EXPIRY-YYYYMM REDEFINES WS-KSA-FNDK-EXPIRY.
+             05 WS-KSA-FNDK-EXPIRY-YYYY  PIC 9(04).
+             05 WS-KSA-FNDK-EXPIRY-MM    PIC 9(02).
+          03 WS-KSA-FNDK-DATE            PIC X(10).
+          03 WS-KSA-FNDK-KEY-SELECTOR    PIC X(08).
+             88 WS-KSA-FNDK-SEL-CVI1               VALUE 'CVI1'.
+             88 WS-KSA-FNDK-SEL-CVI2               VALUE 'CVI1'.
+             88 WS-KSA-FNDK-SEL-ICVI               VALUE 'ICVI'.
+             88 WS-KSA-FNDK-SEL-OPINENC            VALUE 'OPINENC'.
+             88 WS-KSA-FNDK-SEL-IPINENC            VALUE 'IPINENC'.
+             88 WS-KSA-FNDK-SEL-DATA               VALUE 'DATA'.
+          03 WS-KSA-FNDK-LABEL           PIC X(64).
+          03 WS-KSA-FNDK-INDEX-USED      PIC S9(04) COMP.
+          03 WS-KSA-FNDK-KCV             PIC X(06).
+          03 WS-KSA-FNDK-PINBLOCK-FORMAT PIC X(08).
+      * Work field for FND-KEY
+       01 WS-KSA-FND-KEY-WORK.
+          03 WS-KSA-FNDK-WORK-ACTIVE  PIC X(26).
+          03 WS-KSA-FNDK-WORK-ACTIVE2 REDEFINES WS-KSA-FNDK-WORK-ACTIVE.
+             05 WS-KSA-FNDK-WORK-ACTIVE-DATE PIC X(10).
+             05 FILLER                       PIC X(16).
+          03 WS-KSA-FNDK-WORK-EXPIRY PIC X(26).
+          03 WS-KSA-FNDK-WORK-EXPIRY2 REDEFINES WS-KSA-FNDK-WORK-EXPIRY.
+             05 WS-KSA-FNDK-WORK-EXPIRY-DATE PIC X(10).
+             05 FILLER                       PIC X(16).
+          03 WS-KSA-FNDK-WORK-EXPIRY-LOW PIC X(26).
+          03 WS-KSA-FNDK-WORK-EXPIRY-LOW2 REDEFINES
+             WS-KSA-FNDK-WORK-EXPIRY-LOW.
+             05 WS-KSA-FNDK-WORK-EXPIRY-DATEL   PIC X(10).
+             05 FILLER                       PIC X(16).
+          03 WS-KSA-FNDK-WORK-EXPIRY-LOW-N PIC S9(4) COMP.
+          03 WS-KSA-FNDK-WORK-KEYSTATE   PIC X(01).
+          03 WS-KSA-FNDK-WORK-KEYTYPE    PIC X(08).
+          03 WS-KSA-FNDK-WORK-INDEX      PIC 9(04).
+          03 WS-KSA-FNDK-WORK-INDEX-TEXT REDEFINES
+           WS-KSA-FNDK-WORK-INDEX.
+             05 WS-KSA-FNDK-WORK-INDEXX  PIC X(04).
+          03 WS-KSA-FNDK-WORK-SELECTOR   PIC X(14).
+          03 WS-KSA-FNDK-WORK-RULE2      PIC X(26).
+          03 WS-KSA-FNDK-WORK-RULE3      PIC X(26).
+
+      * Flag field for FND-KEY
+       01 FLAG-KEYSET-INDEX-SELECTION    PIC 9.
+          88 FLAG-KEYSET-INDEX           VALUE 0.
+          88 FLAG-KEYSET-NOINDEX         VALUE 1.
+          88 FLAG-KEYSET-DEFAULT         VALUE 2.
+
+       01 WS-TEST-FETCH.
+          03 WS-TEST-GROUP-NAME          PIC X(64).
+          03 WS-TEST-MEM-ID1             PIC X(64).
+
+       01 PROGRAM-STATUS                 PIC 9.
+          88 OK                                    VALUE 0.
+          88 ERROR-OCCURRED                        VALUE 1.
+       01 DEBUG-STATUS                   PIC 9.
+          88 DEBUG-OFF                             VALUE 0.
+          88 DEBUG-ON                              VALUE 1.
+
+       01 INDEXES.
+          03 IX                          PIC 9(08) COMP.
+          03 IY                          PIC 9(08) COMP.
+
+
+       COPY ERRORV01.
+
+       LINKAGE SECTION.
+
+       01 INP-FUNCTION.
+          03 KSA-FUNCTION                        PIC X(08).
+             88 KSA-F-FND-KEY             VALUE 'FND-KEY'.
+             88 KSA-F-FND-CRT             VALUE 'FND-CRT'.
+             88 KSA-F-PIN-GEN             VALUE 'PIN-GEN'.
+             88 KSA-F-PVV-OFF             VALUE 'PVV-OFF'.
+             88 KSA-F-PIN-RFRM            VALUE 'PIN-RFRM'.
+             88 KSA-F-PIN-DEC             VALUE 'PIN-DEC'.
+             88 KSA-F-PIN-XLAT            VALUE 'PIN-XLAT'.
+             88 KSA-F-PIN-CCLR            VALUE 'PIN-CCLR'.
+             88 KSA-F-PIN-OFF2            VALUE 'PIN-OFF2'.
+             88 KSA-F-PIN-VER             VALUE 'PIN-VER'.
+             88 KSA-F-PAN-ENC             VALUE 'PAN-ENC'.
+             88 KSA-F-PAN-DEC             VALUE 'PAN-DEC'.
+             88 KSA-F-CVI-GEN             VALUE 'CVI-GEN'.
+             88 KSA-F-CVI-VER             VALUE 'CVI-VER'.
+             88 KSA-F-CSC-GEN             VALUE 'CSC-GEN'.
+             88 KSA-F-CSC-VER             VALUE 'CSC-VER'.
+             88 KSA-F-CVC3-GEN            VALUE 'CVC3-GEN'.
+             88 KSA-F-GEN-TPK             VALUE 'GEN-TPK'.
+             88 KSA-F-DER-KEYS            VALUE 'DER-KEYS'.
+             88 KSA-F-MAC-GEN             VALUE 'MAC-GEN'.
+             88 KSA-F-TC-VER              VALUE 'TC-VER'.
+             88 KSA-F-RSA-GET             VALUE 'RSA-GET'.
+             88 KSA-F-SDA-SGN             VALUE 'SDA-SGN'.
+             88 KSA-F-FND-GPP             VALUE 'FND-GPP'.
+       01 INP-DEBUG-STATUS                       PIC 9.
+       01 INP-SQL-TIMESTAMP.
+          03 INP-SQL-DATE                       PIC X(10).
+          03 INP-SQL-DATE-HHMM                  PIC X(16).
+       01 KSA-FND-KEY.
+          03 KSA-FNDK-KEYSET-ID                  PIC X(32).
+          03 KSA-FNDK-KEY-TYPE                   PIC X(08).
+          03 KSA-FNDK-INDEX                      PIC S9(04) COMP.
+          03 KSA-FNDK-EXPIRY.
+             05 KSA-FNDK-EXPIRY-YYYY             PIC 9(04).
+             05 KSA-FNDK-EXPIRY-MM               PIC 9(02).
+          03 KSA-FNDK-DATE                       PIC X(10).
+          03 KSA-FNDK-KEY-SELECTOR               PIC X(08).
+             88 KSA-FNDK-SEL-CVI1               VALUE 'CVI1'.
+             88 KSA-FNDK-SEL-CVI2               VALUE 'CVI1'.
+             88 KSA-FNDK-SEL-ICVI               VALUE 'ICVI'.
+             88 KSA-FNDK-SEL-OPINENC            VALUE 'OPINENC'.
+             88 KSA-FNDK-SEL-IPINENC            VALUE 'IPINENC'.
+             88 KSA-FNDK-SEL-DATA               VALUE 'DATA'.
+          03 KSA-FNDK-LABEL                      PIC X(64).
+          03 KSA-FNDK-INDEX-USED                 PIC 9(04) COMP.
+          03 KSA-FNDK-KCV                        PIC X(06).
+          03 KSA-FNDK-PINBLOCK-FORMAT            PIC X(08).
+       01 KSA-RETURN-GROUP.
+          03 KSA-RETURN-REASON-TYPE           PIC X(02).
+          03 KSA-RETURN-CODE                  PIC S9(9) COMP.
+          03 KSA-REASON-CODE                  PIC S9(9) COMP.
+          03 KSA-PROGRAM-NAME                 PIC X(08).
+          03 KSA-PROGRAM-LOCATION             PIC X(02).
+          03 KSA-RETURN-TEXT                  PIC X(32).
+          03 KSA-RETURN-INFO                  PIC X(64).
+
+      *COPY KSAV01.
+
+       PROCEDURE DIVISION USING INP-FUNCTION
+                                INP-DEBUG-STATUS
+                                INP-SQL-TIMESTAMP
+                                KSA-FND-KEY
+                                KSA-RETURN-GROUP.
+
+       STEER SECTION.
+      *****************************************************************
+      *  MAIN CODE START                                              *
+      *****************************************************************
+
+           MOVE INP-DEBUG-STATUS TO DEBUG-STATUS
+           MOVE DAPI-ERROR                   TO KSA-RETURN-REASON-TYPE
+           MOVE 0                            TO KSA-RETURN-CODE
+           MOVE 0                            TO KSA-REASON-CODE
+           MOVE THISPROGID                   TO KSA-PROGRAM-NAME
+           MOVE '00'                         TO KSA-PROGRAM-LOCATION
+           MOVE SPACES                       TO KSA-RETURN-TEXT
+           MOVE SPACES                       TO KSA-RETURN-INFO
+
+           PERFORM C-FND-KEY
+           .
+       EXIT-STEER.
+           GOBACK.
+
+      /****************************************************************
+      /* Find key from key set                                        *
+      /****************************************************************
+       C-FND-KEY SECTION.
+           MOVE KSA-FND-KEY TO WS-KSA-FND-KEY
+           PERFORM CA-FND-KEY
+           .
+       EXIT-C-FND-KEY.
+           EXIT.
+      /****************************************************************
+      /* Find key from key set (internal call)                        *
+      /****************************************************************
+       CA-FND-KEY SECTION.
+
+           IF WS-KSA-FNDK-KEY-SELECTOR = 'DATA'
+            MOVE 'DATA_DEFAULT' TO  WS-KSA-FNDK-WORK-SELECTOR
+           ELSE
+            MOVE WS-KSA-FNDK-KEY-SELECTOR TO WS-KSA-FNDK-WORK-SELECTOR
+           END-IF
+
+           IF  WS-KSA-FNDK-KEY-TYPE = 'PGK' OR 'PVK'
+               MOVE 'PINGEN' TO WS-KSA-FNDK-KEY-SELECTOR
+               IF KSA-F-PIN-VER
+                MOVE 'PINVER' TO WS-KSA-FNDK-KEY-SELECTOR
+               END-IF
+           END-IF
+
+           IF  DEBUG-ON
+               DISPLAY WS-DBUG 'START SQL TESTS, SELECTOR = '
+                WS-KSA-FNDK-KEY-SELECTOR
+           END-IF
+
+      * Move binary index value to decimal text index
+           EVALUATE TRUE
+            WHEN WS-KSA-FNDK-INDEX > 0
+             MOVE WS-KSA-FNDK-INDEX TO WS-KSA-FNDK-WORK-INDEX
+             MOVE WS-KSA-FNDK-INDEX TO WS-KSA-FNDK-INDEX-USED
+             SET FLAG-KEYSET-INDEX TO TRUE
+            WHEN WS-KSA-FNDK-INDEX = -1
+             SET FLAG-KEYSET-DEFAULT TO TRUE
+            WHEN WS-KSA-FNDK-INDEX = -2
+             SET FLAG-KEYSET-NOINDEX TO TRUE
+            WHEN OTHER
+             SET FLAG-KEYSET-NOINDEX TO TRUE
+           END-EVALUATE
+
+      * Move DATE to check rule2
+           IF WS-KSA-FNDK-DATE = SPACES OR LOW-VALUES
+            MOVE INP-SQL-TIMESTAMP TO WS-KSA-FNDK-WORK-RULE2
+           ELSE
+            STRING WS-KSA-FNDK-DATE '-00.00.00.000000' DELIMITED BY SIZE
+            INTO WS-KSA-FNDK-WORK-RULE2
+           END-IF
+
+      * Move DATE to check rule3
+           IF WS-KSA-FNDK-EXPIRY = SPACES OR LOW-VALUES
+            INITIALIZE WS-KSA-FNDK-EXPIRY
+           ELSE
+            STRING WS-KSA-FNDK-EXPIRY(1:4) '-' WS-KSA-FNDK-EXPIRY(5:2)
+            '-01-00.00.00.000000'
+            DELIMITED BY SIZE
+            INTO WS-KSA-FNDK-WORK-RULE3
+           END-IF
+
+      * See if ACTIVE keyset with correct name exists
+           EXEC SQL
+             SELECT
+             G.GROUP_NAME
+             INTO
+             :WS-TEST-GROUP-NAME
+             FROM VKMGGRPG G
+               Where G.group_type = 'KEYSET'
+               and G.group_status = 'A'
+               and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+             FETCH FIRST 1 ROW ONLY
+           END-EXEC
+
+           IF  DEBUG-ON
+               DISPLAY WS-DBUG 'SQL TEST:'
+               DISPLAY WS-DBUG '- KEY SET ACTIVE (AND EXIST)'
+           END-IF
+           IF SQLCODE = 0
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST PASSED'
+            END-IF
+           ELSE
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST FAILED'
+            END-IF
+            MOVE '01' TO KSA-PROGRAM-LOCATION
+            IF SQLCODE = 100
+             MOVE DAPI-ERR-KS-NOTFOUND TO KSA-RETURN-CODE
+             MOVE WS-KSA-FNDK-KEYSET-ID TO KSA-RETURN-TEXT
+             MOVE 'Key set not found or inactive' TO KSA-RETURN-INFO
+            ELSE
+             MOVE DAPI-DB2-ERROR    TO KSA-RETURN-REASON-TYPE
+             MOVE SQLCODE           TO KSA-RETURN-CODE
+             MOVE SQLERRMC(1:64)    TO KSA-RETURN-INFO
+            END-IF
+            GO TO EXIT-CA-FND-KEY
+           END-IF
+
+      * See if key set contains key type requested
+           EXEC SQL
+             SELECT
+             G.GROUP_NAME
+             INTO
+             :WS-TEST-GROUP-NAME
+             FROM VKMGGRPM M, VKMGGRPG G
+               Where G.group_type = 'KEYSET'
+               and G.group_status = 'A'
+               and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+               and M.group_id = G.group_id
+               AND M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+             FETCH FIRST 1 ROW ONLY
+           END-EXEC
+
+           IF  DEBUG-ON
+               DISPLAY WS-DBUG 'SQL TEST:'
+               DISPLAY WS-DBUG '- KEY TYPE DEFINED IN KEY SET'
+           END-IF
+           IF SQLCODE = 0
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST PASSED'
+            END-IF
+           ELSE
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST FAILED'
+            END-IF
+            MOVE 'C1' TO KSA-PROGRAM-LOCATION
+            IF SQLCODE = 100
+             MOVE DAPI-ERR-KSKEY-NOTFOUND TO KSA-RETURN-CODE
+             IF FLAG-KEYSET-DEFAULT
+              MOVE DAPI-ERR-KSKEYDEF-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             IF FLAG-KEYSET-NOINDEX
+              MOVE DAPI-ERR-KSKEYNOIX-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             MOVE 1                       TO KSA-REASON-CODE
+             MOVE WS-KSA-FNDK-KEYSET-ID TO KSA-RETURN-TEXT
+             MOVE WS-KSA-FNDK-KEY-TYPE  TO KSA-RETURN-INFO
+            ELSE
+             MOVE DAPI-DB2-ERROR    TO KSA-RETURN-REASON-TYPE
+             MOVE SQLCODE           TO KSA-RETURN-CODE
+             MOVE SQLERRMC(1:64)    TO KSA-RETURN-INFO
+            END-IF
+            GO TO EXIT-CA-FND-KEY
+           END-IF
+
+      * Check key type for index (specific, DEFAULT or no any)
+      * (get the ukds7 UUID from key set member if success)
+           IF FLAG-KEYSET-INDEX
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME, M.MEM_ID1
+              INTO
+              :WS-TEST-GROUP-NAME,
+              :WS-TEST-MEM-ID1
+              FROM VKMGGRPM M, VKMGGRPG G
+                Where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                AND M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                AND M.MEM_ID3  = :WS-KSA-FNDK-WORK-INDEXX
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+           IF FLAG-KEYSET-DEFAULT
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME, M.MEM_ID1
+              INTO
+              :WS-TEST-GROUP-NAME,
+              :WS-TEST-MEM-ID1
+              FROM VKMGGRPM M, VKMGGRPG G
+                Where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                AND M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                AND M.MEM_ID3  = 'DEFAULT'
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+           IF FLAG-KEYSET-NOINDEX
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME, M.MEM_ID1
+              INTO
+              :WS-TEST-GROUP-NAME,
+              :WS-TEST-MEM-ID1
+              FROM VKMGGRPM M, VKMGGRPG G
+                Where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                AND M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                AND M.MEM_ID3  <> 'DEFAULT'
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+
+           IF  DEBUG-ON
+               DISPLAY WS-DBUG 'SQL TEST:'
+               DISPLAY WS-DBUG '- KEY INDEX OK'
+           END-IF
+           IF SQLCODE = 0
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST PASSED'
+            END-IF
+           ELSE
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST FAILED'
+            END-IF
+            MOVE 'C2' TO KSA-PROGRAM-LOCATION
+            IF SQLCODE = 100
+             MOVE DAPI-ERR-KSKEY-NOTFOUND TO KSA-RETURN-CODE
+             IF FLAG-KEYSET-DEFAULT
+              MOVE DAPI-ERR-KSKEYDEF-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             IF FLAG-KEYSET-NOINDEX
+              MOVE DAPI-ERR-KSKEYNOIX-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             MOVE 2                       TO KSA-REASON-CODE
+             MOVE WS-KSA-FNDK-KEYSET-ID TO KSA-RETURN-TEXT
+             IF FLAG-KEYSET-INDEX
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+               WS-KSA-FNDK-WORK-INDEXX DELIMITED BY SIZE INTO
+                                            KSA-RETURN-INFO
+             END-IF
+             IF FLAG-KEYSET-DEFAULT
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+               'DEFAULT'               DELIMITED BY SIZE INTO
+                                            KSA-RETURN-INFO
+             END-IF
+             IF FLAG-KEYSET-NOINDEX
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+               'ANY INDEX'             DELIMITED BY SIZE INTO
+                                            KSA-RETURN-INFO
+             END-IF
+            ELSE
+             MOVE DAPI-DB2-ERROR    TO KSA-RETURN-REASON-TYPE
+             MOVE SQLCODE           TO KSA-RETURN-CODE
+             MOVE SQLERRMC(1:64)    TO KSA-RETURN-INFO
+            END-IF
+            GO TO EXIT-CA-FND-KEY
+           END-IF
+
+      * Check that key set key is found active in UKDS7
+           IF FLAG-KEYSET-INDEX
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                KeyState varchar(16) path '../../../key/KeyState',
+                DateExpiry timestamp path 'DateExpiry'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  = :WS-KSA-FNDK-WORK-INDEXX
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+           IF FLAG-KEYSET-DEFAULT
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                KeyState varchar(16) path '../../../key/KeyState',
+                DateExpiry timestamp path 'DateExpiry'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  = 'DEFAULT'
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+           IF FLAG-KEYSET-NOINDEX
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                KeyState varchar(16) path '../../../key/KeyState',
+                DateExpiry timestamp path 'DateExpiry'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  <> 'DEFAULT'
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+
+           IF  DEBUG-ON
+               DISPLAY WS-DBUG 'SQL TEST:'
+               DISPLAY WS-DBUG '- KEY FOUND ACTIVE IN UKDS7'
+           END-IF
+           IF SQLCODE = 0
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST PASSED'
+            END-IF
+           ELSE
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST FAILED'
+            END-IF
+            MOVE 'C3' TO KSA-PROGRAM-LOCATION
+            IF SQLCODE = 100
+             MOVE DAPI-ERR-KSKEY-NOTFOUND TO KSA-RETURN-CODE
+             IF FLAG-KEYSET-DEFAULT
+              MOVE DAPI-ERR-KSKEYDEF-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             IF FLAG-KEYSET-NOINDEX
+              MOVE DAPI-ERR-KSKEYNOIX-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             MOVE 3                       TO KSA-REASON-CODE
+             MOVE WS-KSA-FNDK-KEYSET-ID   TO KSA-RETURN-TEXT
+             IF FLAG-KEYSET-INDEX
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     WS-KSA-FNDK-WORK-INDEXX ' '
+                     WS-TEST-MEM-ID1  DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+             IF FLAG-KEYSET-DEFAULT
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     'DEFAULT '
+                     WS-TEST-MEM-ID1  DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+             IF FLAG-KEYSET-NOINDEX
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     'ANY KEY '
+                     WS-TEST-MEM-ID1  DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+            ELSE
+             MOVE DAPI-DB2-ERROR    TO KSA-RETURN-REASON-TYPE
+             MOVE SQLCODE           TO KSA-RETURN-CODE
+             MOVE SQLERRMC(1:64)    TO KSA-RETURN-INFO
+            END-IF
+            GO TO EXIT-CA-FND-KEY
+           END-IF
+
+      * Check that key set key is has required keymaterial ICSF keytype
+           IF FLAG-KEYSET-INDEX
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                KeyState varchar(16) path '../../../key/KeyState',
+                DateExpiry timestamp path 'DateExpiry',
+                ICSFKeyType varchar(16) path 'ICSFKeyType'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  = :WS-KSA-FNDK-WORK-INDEXX
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                     or M.MEM_TYPE = 'ISS-PRIV')
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+           IF FLAG-KEYSET-DEFAULT
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                KeyState varchar(16) path '../../../key/KeyState',
+                DateExpiry timestamp path 'DateExpiry',
+                ICSFKeyType varchar(16) path 'ICSFKeyType'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  = 'DEFAULT'
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                     or M.MEM_TYPE = 'ISS-PRIV')
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+           IF FLAG-KEYSET-NOINDEX
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                KeyState varchar(16) path '../../../key/KeyState',
+                DateExpiry timestamp path 'DateExpiry',
+                ICSFKeyType varchar(16) path 'ICSFKeyType'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  <> 'DEFAULT'
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                     or M.MEM_TYPE = 'ISS-PRIV')
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+
+           IF  DEBUG-ON
+               DISPLAY WS-DBUG 'SQL TEST:'
+               DISPLAY WS-DBUG '- KEY FOUND WITH REQUIRED KEY '
+                'MATERIAL'
+           END-IF
+           IF SQLCODE = 0
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST PASSED'
+            END-IF
+           ELSE
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST FAILED'
+            END-IF
+            MOVE 'C4' TO KSA-PROGRAM-LOCATION
+            IF SQLCODE = 100
+             MOVE DAPI-ERR-KSKEY-NOTFOUND TO KSA-RETURN-CODE
+             IF FLAG-KEYSET-DEFAULT
+              MOVE DAPI-ERR-KSKEYDEF-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             IF FLAG-KEYSET-NOINDEX
+              MOVE DAPI-ERR-KSKEYNOIX-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             MOVE 4                       TO KSA-REASON-CODE
+             MOVE WS-KSA-FNDK-KEYSET-ID   TO KSA-RETURN-TEXT
+             IF FLAG-KEYSET-INDEX
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     WS-KSA-FNDK-WORK-INDEXX ' '
+                     WS-TEST-MEM-ID1(1:36) ' '
+                     WS-KSA-FNDK-WORK-SELECTOR
+                                      DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+             IF FLAG-KEYSET-DEFAULT
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     'DEF '
+                     WS-TEST-MEM-ID1(1:36) ' '
+                     WS-KSA-FNDK-WORK-SELECTOR
+                                      DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+             IF FLAG-KEYSET-NOINDEX
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     'ANY '
+                     WS-TEST-MEM-ID1(1:36) ' '
+                     WS-KSA-FNDK-WORK-SELECTOR
+                                      DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+            ELSE
+             MOVE DAPI-DB2-ERROR    TO KSA-RETURN-REASON-TYPE
+             MOVE SQLCODE           TO KSA-RETURN-CODE
+             MOVE SQLERRMC(1:64)    TO KSA-RETURN-INFO
+            END-IF
+            GO TO EXIT-CA-FND-KEY
+           END-IF
+
+      * Check that key material DateActive <= required date
+           IF FLAG-KEYSET-INDEX
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                DateActive timestamp path 'DateActive',
+                DateExpiry timestamp path 'DateExpiry',
+                DateExpiryLow
+                 timestamp path '../../../key/DateExpiryLow',
+                KeyState varchar(16) path '../../../key/KeyState',
+                KCV      varchar(6) path 'KCV',
+                KeyLabel varchar(64) path 'KeyLabel',
+                ICSFKeyType varchar(16) path 'ICSFKeyType'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  = :WS-KSA-FNDK-WORK-INDEXX
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                     or M.MEM_TYPE = 'ISS-PRIV')
+                and xmlTable.DateActive + current timezone
+                                        <= :WS-KSA-FNDK-WORK-RULE2
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+           IF FLAG-KEYSET-DEFAULT
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                DateActive timestamp path 'DateActive',
+                DateExpiry timestamp path 'DateExpiry',
+                DateExpiryLow
+                 timestamp path '../../../key/DateExpiryLow',
+                KeyState varchar(16) path '../../../key/KeyState',
+                KCV      varchar(6) path 'KCV',
+                KeyLabel varchar(64) path 'KeyLabel',
+                ICSFKeyType varchar(16) path 'ICSFKeyType'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  = 'DEFAULT'
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                     or M.MEM_TYPE = 'ISS-PRIV')
+                and xmlTable.DateActive + current timezone
+                                        <= :WS-KSA-FNDK-WORK-RULE2
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+           IF FLAG-KEYSET-NOINDEX
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                DateActive timestamp path 'DateActive',
+                DateExpiry timestamp path 'DateExpiry',
+                DateExpiryLow
+                 timestamp path '../../../key/DateExpiryLow',
+                KeyState varchar(16) path '../../../key/KeyState',
+                KCV      varchar(6) path 'KCV',
+                KeyLabel varchar(64) path 'KeyLabel',
+                ICSFKeyType varchar(16) path 'ICSFKeyType'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  <> 'DEFAULT'
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                     or M.MEM_TYPE = 'ISS-PRIV')
+                and xmlTable.DateActive + current timezone
+                                        <= :WS-KSA-FNDK-WORK-RULE2
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+
+           IF  DEBUG-ON
+               DISPLAY WS-DBUG 'SQL TEST:'
+               DISPLAY WS-DBUG '- KEY FOUND HAS DateActive'
+                ' <= REQUESTED DATE'
+           END-IF
+           IF SQLCODE = 0
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST PASSED'
+            END-IF
+           ELSE
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST FAILED'
+            END-IF
+            MOVE 'C5' TO KSA-PROGRAM-LOCATION
+            IF SQLCODE = 100
+             MOVE DAPI-ERR-KSKEY-NOTFOUND TO KSA-RETURN-CODE
+             IF FLAG-KEYSET-DEFAULT
+              MOVE DAPI-ERR-KSKEYDEF-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             IF FLAG-KEYSET-NOINDEX
+              MOVE DAPI-ERR-KSKEYNOIX-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             MOVE 5                       TO KSA-REASON-CODE
+             MOVE WS-KSA-FNDK-KEYSET-ID   TO KSA-RETURN-TEXT
+             IF FLAG-KEYSET-INDEX
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     WS-KSA-FNDK-WORK-INDEXX ' '
+                     WS-TEST-MEM-ID1(1:36) ' '
+                     WS-KSA-FNDK-WORK-RULE2 (1:10)
+                                      DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+             IF FLAG-KEYSET-DEFAULT
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     'DEF '
+                     WS-TEST-MEM-ID1(1:36) ' '
+                     WS-KSA-FNDK-WORK-RULE2 (1:10)
+                                      DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+             IF FLAG-KEYSET-NOINDEX
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     'ANY '
+                     WS-TEST-MEM-ID1(1:36) ' '
+                     WS-KSA-FNDK-WORK-RULE2 (1:10)
+                                      DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+            ELSE
+             MOVE DAPI-DB2-ERROR    TO KSA-RETURN-REASON-TYPE
+             MOVE SQLCODE           TO KSA-RETURN-CODE
+             MOVE SQLERRMC(1:64)    TO KSA-RETURN-INFO
+            END-IF
+            GO TO EXIT-CA-FND-KEY
+           END-IF
+
+      * Check that key material DateExpiry > required date
+           IF FLAG-KEYSET-INDEX
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                DateActive timestamp path 'DateActive',
+                DateExpiry timestamp path 'DateExpiry',
+                DateExpiryLow
+                 timestamp path '../../../key/DateExpiryLow',
+                KeyState varchar(16) path '../../../key/KeyState',
+                KCV      varchar(6) path 'KCV',
+                KeyLabel varchar(64) path 'KeyLabel',
+                ICSFKeyType varchar(16) path 'ICSFKeyType'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  = :WS-KSA-FNDK-WORK-INDEXX
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                     or M.MEM_TYPE = 'ISS-PRIV')
+                and xmlTable.DateActive + current timezone
+                                        <= :WS-KSA-FNDK-WORK-RULE2
+                and xmlTable.DateExpiry + current timezone
+                                        > :WS-KSA-FNDK-WORK-RULE2
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+           IF FLAG-KEYSET-DEFAULT
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                DateActive timestamp path 'DateActive',
+                DateExpiry timestamp path 'DateExpiry',
+                DateExpiryLow
+                 timestamp path '../../../key/DateExpiryLow',
+                KeyState varchar(16) path '../../../key/KeyState',
+                KCV      varchar(6) path 'KCV',
+                KeyLabel varchar(64) path 'KeyLabel',
+                ICSFKeyType varchar(16) path 'ICSFKeyType'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  = 'DEFAULT'
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                     or M.MEM_TYPE = 'ISS-PRIV')
+                and xmlTable.DateActive + current timezone
+                                        <= :WS-KSA-FNDK-WORK-RULE2
+                and xmlTable.DateExpiry + current timezone
+                                        > :WS-KSA-FNDK-WORK-RULE2
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+           IF FLAG-KEYSET-NOINDEX
+            EXEC SQL
+              SELECT
+              G.GROUP_NAME
+              INTO
+              :WS-TEST-GROUP-NAME
+              FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+              xmltable
+              ( '$d/key/KeyMaterials/KeyMaterial'
+                 passing u7_xml as "d" columns
+                DateActive timestamp path 'DateActive',
+                DateExpiry timestamp path 'DateExpiry',
+                DateExpiryLow
+                 timestamp path '../../../key/DateExpiryLow',
+                KeyState varchar(16) path '../../../key/KeyState',
+                KCV      varchar(6) path 'KCV',
+                KeyLabel varchar(64) path 'KeyLabel',
+                ICSFKeyType varchar(16) path 'ICSFKeyType'
+                ) as xmlTable
+                where G.group_type = 'KEYSET'
+                and G.group_status = 'A'
+                and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                and M.group_id = G.group_id
+                and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                and M.MEM_ID3  <> 'DEFAULT'
+                and mainTable.u7_uuid = M.mem_id1
+                and xmlTable.KeyState = 'ACTIVE'
+                and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                     or M.MEM_TYPE = 'ISS-PRIV')
+                and xmlTable.DateActive + current timezone
+                                        <= :WS-KSA-FNDK-WORK-RULE2
+                and xmlTable.DateExpiry + current timezone
+                                        > :WS-KSA-FNDK-WORK-RULE2
+                ORDER BY xmlTable.DateExpiry ASC
+              FETCH FIRST 1 ROW ONLY
+            END-EXEC
+           END-IF
+
+           IF  DEBUG-ON
+               DISPLAY WS-DBUG 'SQL TEST:'
+               DISPLAY WS-DBUG '- KEY FOUND HAS DateExpiry'
+                ' > REQUESTED DATE'
+           END-IF
+           IF SQLCODE = 0
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST PASSED'
+            END-IF
+           ELSE
+            IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST FAILED'
+            END-IF
+            MOVE 'C6' TO KSA-PROGRAM-LOCATION
+            IF SQLCODE = 100
+             MOVE DAPI-ERR-KSKEY-NOTFOUND TO KSA-RETURN-CODE
+             IF FLAG-KEYSET-DEFAULT
+              MOVE DAPI-ERR-KSKEYDEF-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             IF FLAG-KEYSET-NOINDEX
+              MOVE DAPI-ERR-KSKEYNOIX-NOTFOUND TO KSA-RETURN-CODE
+             END-IF
+             MOVE 6                       TO KSA-REASON-CODE
+             MOVE WS-KSA-FNDK-KEYSET-ID   TO KSA-RETURN-TEXT
+             IF FLAG-KEYSET-INDEX
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     WS-KSA-FNDK-WORK-INDEXX ' '
+                     WS-TEST-MEM-ID1(1:36) ' '
+                     WS-KSA-FNDK-WORK-RULE2 (1:10)
+                                      DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+             IF FLAG-KEYSET-INDEX
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     'DEF '
+                     WS-TEST-MEM-ID1(1:36) ' '
+                     WS-KSA-FNDK-WORK-RULE2 (1:10)
+                                      DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+             IF FLAG-KEYSET-NOINDEX
+              STRING WS-KSA-FNDK-KEY-TYPE ' '
+                     'ANY '
+                     WS-TEST-MEM-ID1(1:36) ' '
+                     WS-KSA-FNDK-WORK-RULE2 (1:10)
+                                      DELIMITED BY SIZE INTO
+                                             KSA-RETURN-INFO
+             END-IF
+            ELSE
+             MOVE DAPI-DB2-ERROR    TO KSA-RETURN-REASON-TYPE
+             MOVE SQLCODE           TO KSA-RETURN-CODE
+             MOVE SQLERRMC(1:64)    TO KSA-RETURN-INFO
+            END-IF
+            GO TO EXIT-CA-FND-KEY
+           END-IF
+
+      * Check to do if card expiry specified:
+           IF WS-KSA-FNDK-EXPIRY NOT = SPACES
+      * Check that key material DateExpiryLow <= required card date
+            IF FLAG-KEYSET-INDEX
+             EXEC SQL
+               SELECT
+               G.GROUP_NAME
+               INTO
+               :WS-TEST-GROUP-NAME
+               FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+               xmltable
+               ( '$d/key/KeyMaterials/KeyMaterial'
+                  passing u7_xml as "d" columns
+                 DateActive timestamp path 'DateActive',
+                 DateExpiry timestamp path 'DateExpiry',
+                 DateExpiryLow
+                  timestamp path '../../../key/DateExpiryLow',
+                 KeyState varchar(16) path '../../../key/KeyState',
+                 KCV      varchar(6) path 'KCV',
+                 KeyLabel varchar(64) path 'KeyLabel',
+                 ICSFKeyType varchar(16) path 'ICSFKeyType'
+                 ) as xmlTable
+                 where G.group_type = 'KEYSET'
+                 and G.group_status = 'A'
+                 and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                 and M.group_id = G.group_id
+                 and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                 and M.MEM_ID3  = :WS-KSA-FNDK-WORK-INDEXX
+                 and mainTable.u7_uuid = M.mem_id1
+                 and xmlTable.KeyState = 'ACTIVE'
+                 and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                      or M.MEM_TYPE = 'ISS-PRIV')
+                 and xmlTable.DateActive + current timezone
+                                         <= :WS-KSA-FNDK-WORK-RULE2
+                 and xmlTable.DateExpiry + current timezone
+                                         > :WS-KSA-FNDK-WORK-RULE2
+                 and (
+                   (xmlTable.DateExpiryLow IS NOT NULL
+                   and xmlTable.DateExpiryLow + current timezone
+                                              <= :WS-KSA-FNDK-WORK-RULE3
+                   )
+                   or
+                   (xmlTable.DateExpiryLow IS NULL
+                   and xmlTable.DateActive + current timezone
+                                           <= :WS-KSA-FNDK-WORK-RULE3
+                   )
+                     )
+                 ORDER BY xmlTable.DateExpiry ASC
+               FETCH FIRST 1 ROW ONLY
+             END-EXEC
+            END-IF
+            IF FLAG-KEYSET-DEFAULT
+             EXEC SQL
+               SELECT
+               G.GROUP_NAME
+               INTO
+               :WS-TEST-GROUP-NAME
+               FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+               xmltable
+               ( '$d/key/KeyMaterials/KeyMaterial'
+                  passing u7_xml as "d" columns
+                 DateActive timestamp path 'DateActive',
+                 DateExpiry timestamp path 'DateExpiry',
+                 DateExpiryLow
+                  timestamp path '../../../key/DateExpiryLow',
+                 KeyState varchar(16) path '../../../key/KeyState',
+                 KCV      varchar(6) path 'KCV',
+                 KeyLabel varchar(64) path 'KeyLabel',
+                 ICSFKeyType varchar(16) path 'ICSFKeyType'
+                 ) as xmlTable
+                 where G.group_type = 'KEYSET'
+                 and G.group_status = 'A'
+                 and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                 and M.group_id = G.group_id
+                 and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                 and M.MEM_ID3  = 'DEFAULT'
+                 and mainTable.u7_uuid = M.mem_id1
+                 and xmlTable.KeyState = 'ACTIVE'
+                 and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                      or M.MEM_TYPE = 'ISS-PRIV')
+                 and xmlTable.DateActive + current timezone
+                                         <= :WS-KSA-FNDK-WORK-RULE2
+                 and xmlTable.DateExpiry + current timezone
+                                         > :WS-KSA-FNDK-WORK-RULE2
+                 and (
+                   (xmlTable.DateExpiryLow IS NOT NULL
+                   and xmlTable.DateExpiryLow + current timezone
+                                              <= :WS-KSA-FNDK-WORK-RULE3
+                   )
+                   or
+                   (xmlTable.DateExpiryLow IS NULL
+                   and xmlTable.DateActive + current timezone
+                                           <= :WS-KSA-FNDK-WORK-RULE3
+                   )
+                     )
+                 ORDER BY xmlTable.DateExpiry ASC
+               FETCH FIRST 1 ROW ONLY
+             END-EXEC
+            END-IF
+            IF FLAG-KEYSET-NOINDEX
+             EXEC SQL
+               SELECT
+               G.GROUP_NAME
+               INTO
+               :WS-TEST-GROUP-NAME
+               FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+               xmltable
+               ( '$d/key/KeyMaterials/KeyMaterial'
+                  passing u7_xml as "d" columns
+                 DateActive timestamp path 'DateActive',
+                 DateExpiry timestamp path 'DateExpiry',
+                 DateExpiryLow
+                  timestamp path '../../../key/DateExpiryLow',
+                 KeyState varchar(16) path '../../../key/KeyState',
+                 KCV      varchar(6) path 'KCV',
+                 KeyLabel varchar(64) path 'KeyLabel',
+                 ICSFKeyType varchar(16) path 'ICSFKeyType'
+                 ) as xmlTable
+                 where G.group_type = 'KEYSET'
+                 and G.group_status = 'A'
+                 and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                 and M.group_id = G.group_id
+                 and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                 and M.MEM_ID3  <> 'DEFAULT'
+                 and mainTable.u7_uuid = M.mem_id1
+                 and xmlTable.KeyState = 'ACTIVE'
+                 and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                      or M.MEM_TYPE = 'ISS-PRIV')
+                 and xmlTable.DateActive + current timezone
+                                         <= :WS-KSA-FNDK-WORK-RULE2
+                 and xmlTable.DateExpiry + current timezone
+                                         > :WS-KSA-FNDK-WORK-RULE2
+                 and (
+                   (xmlTable.DateExpiryLow IS NOT NULL
+                   and xmlTable.DateExpiryLow + current timezone
+                                              <= :WS-KSA-FNDK-WORK-RULE3
+                   )
+                   or
+                   (xmlTable.DateExpiryLow IS NULL
+                   and xmlTable.DateActive + current timezone
+                                           <= :WS-KSA-FNDK-WORK-RULE3
+                   )
+                     )
+                 ORDER BY xmlTable.DateExpiry ASC
+               FETCH FIRST 1 ROW ONLY
+             END-EXEC
+            END-IF
+
+            IF  DEBUG-ON
+                DISPLAY WS-DBUG 'SQL TEST:'
+                DISPLAY WS-DBUG '- KEY FOUND HAS DateExpiryLow '
+                 '<= REQUESTED CARD EXPIRY DATE '
+                 '(OR DateActive IF NO DateExpiryLow FOUND)'
+            END-IF
+            IF SQLCODE = 0
+             IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST PASSED'
+             END-IF
+            ELSE
+             IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST FAILED'
+             END-IF
+             MOVE 'C7' TO KSA-PROGRAM-LOCATION
+             IF SQLCODE = 100
+              MOVE DAPI-ERR-KSKEY-NOTFOUND TO KSA-RETURN-CODE
+              IF FLAG-KEYSET-DEFAULT
+               MOVE DAPI-ERR-KSKEYDEF-NOTFOUND TO KSA-RETURN-CODE
+              END-IF
+              IF FLAG-KEYSET-NOINDEX
+               MOVE DAPI-ERR-KSKEYNOIX-NOTFOUND TO KSA-RETURN-CODE
+              END-IF
+              MOVE 7                       TO KSA-REASON-CODE
+              MOVE WS-KSA-FNDK-KEYSET-ID   TO KSA-RETURN-TEXT
+              IF FLAG-KEYSET-INDEX
+               STRING WS-KSA-FNDK-KEY-TYPE ' '
+                      WS-KSA-FNDK-WORK-INDEXX ' '
+                      WS-TEST-MEM-ID1(1:36) ' '
+                      WS-KSA-FNDK-WORK-RULE3 (1:10)
+                                       DELIMITED BY SIZE INTO
+                                              KSA-RETURN-INFO
+              END-IF
+              IF FLAG-KEYSET-DEFAULT
+               STRING WS-KSA-FNDK-KEY-TYPE ' '
+                      'DEF '
+                      WS-TEST-MEM-ID1(1:36) ' '
+                      WS-KSA-FNDK-WORK-RULE3 (1:10)
+                                       DELIMITED BY SIZE INTO
+                                              KSA-RETURN-INFO
+              END-IF
+              IF FLAG-KEYSET-NOINDEX
+               STRING WS-KSA-FNDK-KEY-TYPE ' '
+                      'ANY '
+                      WS-TEST-MEM-ID1(1:36) ' '
+                      WS-KSA-FNDK-WORK-RULE3 (1:10)
+                                       DELIMITED BY SIZE INTO
+                                              KSA-RETURN-INFO
+              END-IF
+             ELSE
+              MOVE DAPI-DB2-ERROR    TO KSA-RETURN-REASON-TYPE
+              MOVE SQLCODE           TO KSA-RETURN-CODE
+              MOVE SQLERRMC(1:64)    TO KSA-RETURN-INFO
+             END-IF
+             GO TO EXIT-CA-FND-KEY
+            END-IF
+
+      * Check that key material DateExpiry > required card date
+            IF FLAG-KEYSET-INDEX
+             EXEC SQL
+               SELECT
+               G.GROUP_NAME
+               INTO
+               :WS-TEST-GROUP-NAME
+               FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+               xmltable
+               ( '$d/key/KeyMaterials/KeyMaterial'
+                  passing u7_xml as "d" columns
+                 DateActive timestamp path 'DateActive',
+                 DateExpiry timestamp path 'DateExpiry',
+                 DateExpiryLow
+                  timestamp path '../../../key/DateExpiryLow',
+                 KeyState varchar(16) path '../../../key/KeyState',
+                 KCV      varchar(6) path 'KCV',
+                 KeyLabel varchar(64) path 'KeyLabel',
+                 ICSFKeyType varchar(16) path 'ICSFKeyType'
+                 ) as xmlTable
+                 where G.group_type = 'KEYSET'
+                 and G.group_status = 'A'
+                 and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                 and M.group_id = G.group_id
+                 and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                 and M.MEM_ID3  = :WS-KSA-FNDK-WORK-INDEXX
+                 and mainTable.u7_uuid = M.mem_id1
+                 and xmlTable.KeyState = 'ACTIVE'
+                 and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                      or M.MEM_TYPE = 'ISS-PRIV')
+                 and xmlTable.DateActive + current timezone
+                                         <= :WS-KSA-FNDK-WORK-RULE2
+                 and xmlTable.DateExpiry + current timezone
+                                         > :WS-KSA-FNDK-WORK-RULE2
+                 and (
+                   (xmlTable.DateExpiryLow IS NOT NULL
+                   and xmlTable.DateExpiryLow + current timezone
+                                              <= :WS-KSA-FNDK-WORK-RULE3
+                   and xmlTable.DateExpiry + current timezone
+                                           > :WS-KSA-FNDK-WORK-RULE3
+                   )
+                   or
+                   (xmlTable.DateExpiryLow IS NULL
+                   and xmlTable.DateActive + current timezone
+                                           <= :WS-KSA-FNDK-WORK-RULE3
+                   and xmlTable.DateExpiry + current timezone
+                                           > :WS-KSA-FNDK-WORK-RULE3
+                   )
+                     )
+                ORDER BY xmlTable.DateExpiry ASC
+               FETCH FIRST 1 ROW ONLY
+             END-EXEC
+            END-IF
+            IF FLAG-KEYSET-DEFAULT
+             EXEC SQL
+               SELECT
+               G.GROUP_NAME
+               INTO
+               :WS-TEST-GROUP-NAME
+               FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+               xmltable
+               ( '$d/key/KeyMaterials/KeyMaterial'
+                  passing u7_xml as "d" columns
+                 DateActive timestamp path 'DateActive',
+                 DateExpiry timestamp path 'DateExpiry',
+                 DateExpiryLow
+                  timestamp path '../../../key/DateExpiryLow',
+                 KeyState varchar(16) path '../../../key/KeyState',
+                 KCV      varchar(6) path 'KCV',
+                 KeyLabel varchar(64) path 'KeyLabel',
+                 ICSFKeyType varchar(16) path 'ICSFKeyType'
+                 ) as xmlTable
+                 where G.group_type = 'KEYSET'
+                 and G.group_status = 'A'
+                 and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                 and M.group_id = G.group_id
+                 and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                 and M.MEM_ID3  = 'DEFAULT'
+                 and mainTable.u7_uuid = M.mem_id1
+                 and xmlTable.KeyState = 'ACTIVE'
+                 and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                      or M.MEM_TYPE = 'ISS-PRIV')
+                 and xmlTable.DateActive + current timezone
+                                         <= :WS-KSA-FNDK-WORK-RULE2
+                 and xmlTable.DateExpiry + current timezone
+                                         > :WS-KSA-FNDK-WORK-RULE2
+                 and (
+                   (xmlTable.DateExpiryLow IS NOT NULL
+                   and xmlTable.DateExpiryLow + current timezone
+                                              <= :WS-KSA-FNDK-WORK-RULE3
+                   and xmlTable.DateExpiry + current timezone
+                                           > :WS-KSA-FNDK-WORK-RULE3
+                   )
+                   or
+                   (xmlTable.DateExpiryLow IS NULL
+                   and xmlTable.DateActive + current timezone
+                                           <= :WS-KSA-FNDK-WORK-RULE3
+                   and xmlTable.DateExpiry + current timezone
+                                           > :WS-KSA-FNDK-WORK-RULE3
+                   )
+                     )
+                ORDER BY xmlTable.DateExpiry ASC
+               FETCH FIRST 1 ROW ONLY
+             END-EXEC
+            END-IF
+            IF FLAG-KEYSET-NOINDEX
+             EXEC SQL
+               SELECT
+               G.GROUP_NAME
+               INTO
+               :WS-TEST-GROUP-NAME
+               FROM XUKDS7 as mainTable, VKMGGRPM M, VKMGGRPG G,
+               xmltable
+               ( '$d/key/KeyMaterials/KeyMaterial'
+                  passing u7_xml as "d" columns
+                 DateActive timestamp path 'DateActive',
+                 DateExpiry timestamp path 'DateExpiry',
+                 DateExpiryLow
+                  timestamp path '../../../key/DateExpiryLow',
+                 KeyState varchar(16) path '../../../key/KeyState',
+                 KCV      varchar(6) path 'KCV',
+                 KeyLabel varchar(64) path 'KeyLabel',
+                 ICSFKeyType varchar(16) path 'ICSFKeyType'
+                 ) as xmlTable
+                 where G.group_type = 'KEYSET'
+                 and G.group_status = 'A'
+                 and G.group_name = :WS-KSA-FNDK-KEYSET-ID
+                 and M.group_id = G.group_id
+                 and M.MEM_TYPE = :WS-KSA-FNDK-KEY-TYPE
+                 and M.MEM_ID3  <> 'DEFAULT'
+                 and mainTable.u7_uuid = M.mem_id1
+                 and xmlTable.KeyState = 'ACTIVE'
+                 and (xmlTable.ICSFKeyType = :WS-KSA-FNDK-WORK-SELECTOR
+                      or M.MEM_TYPE = 'ISS-PRIV')
+                 and xmlTable.DateActive + current timezone
+                                         <= :WS-KSA-FNDK-WORK-RULE2
+                 and xmlTable.DateExpiry + current timezone
+                                         > :WS-KSA-FNDK-WORK-RULE2
+                 and (
+                   (xmlTable.DateExpiryLow IS NOT NULL
+                   and xmlTable.DateExpiryLow + current timezone
+                                              <= :WS-KSA-FNDK-WORK-RULE3
+                   and xmlTable.DateExpiry + current timezone
+                                           > :WS-KSA-FNDK-WORK-RULE3
+                   )
+                   or
+                   (xmlTable.DateExpiryLow IS NULL
+                   and xmlTable.DateActive + current timezone
+                                           <= :WS-KSA-FNDK-WORK-RULE3
+                   and xmlTable.DateExpiry + current timezone
+                                           > :WS-KSA-FNDK-WORK-RULE3
+                   )
+                     )
+                ORDER BY xmlTable.DateExpiry ASC
+               FETCH FIRST 1 ROW ONLY
+             END-EXEC
+            END-IF
+
+            IF  DEBUG-ON
+                DISPLAY WS-DBUG 'SQL TEST:'
+                DISPLAY WS-DBUG '- KEY FOUND HAS DateExpiry'
+                 ' > REQUESTED CARD EXPIRY DATE'
+            END-IF
+            IF SQLCODE = 0
+             IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST PASSED'
+             END-IF
+            ELSE
+             IF  DEBUG-ON
+               DISPLAY WS-DBUG 'TEST FAILED'
+             END-IF
+             MOVE 'C8' TO KSA-PROGRAM-LOCATION
+             IF SQLCODE = 100
+              MOVE DAPI-ERR-KSKEY-NOTFOUND TO KSA-RETURN-CODE
+              IF FLAG-KEYSET-DEFAULT
+               MOVE DAPI-ERR-KSKEYDEF-NOTFOUND TO KSA-RETURN-CODE
+              END-IF
+              IF FLAG-KEYSET-NOINDEX
+               MOVE DAPI-ERR-KSKEYNOIX-NOTFOUND TO KSA-RETURN-CODE
+              END-IF
+              MOVE 8                       TO KSA-REASON-CODE
+              MOVE WS-KSA-FNDK-KEYSET-ID   TO KSA-RETURN-TEXT
+              IF FLAG-KEYSET-INDEX
+               STRING WS-KSA-FNDK-KEY-TYPE ' '
+                      WS-KSA-FNDK-WORK-INDEXX ' '
+                      WS-TEST-MEM-ID1(1:36) ' '
+                      WS-KSA-FNDK-WORK-RULE3 (1:10)
+                                       DELIMITED BY SIZE INTO
+                                              KSA-RETURN-INFO
+              END-IF
+              IF FLAG-KEYSET-DEFAULT
+               STRING WS-KSA-FNDK-KEY-TYPE ' '
+                      'DEF '
+                      WS-TEST-MEM-ID1(1:36) ' '
+                      WS-KSA-FNDK-WORK-RULE3 (1:10)
+                                       DELIMITED BY SIZE INTO
+                                              KSA-RETURN-INFO
+              END-IF
+              IF FLAG-KEYSET-NOINDEX
+               STRING WS-KSA-FNDK-KEY-TYPE ' '
+                      'ANY '
+                      WS-TEST-MEM-ID1(1:36) ' '
+                      WS-KSA-FNDK-WORK-RULE3 (1:10)
+                                       DELIMITED BY SIZE INTO
+                                              KSA-RETURN-INFO
+              END-IF
+             ELSE
+              MOVE DAPI-DB2-ERROR    TO KSA-RETURN-REASON-TYPE
+              MOVE SQLCODE           TO KSA-RETURN-CODE
+              MOVE SQLERRMC(1:64)    TO KSA-RETURN-INFO
+             END-IF
+             GO TO EXIT-CA-FND-KEY
+            END-IF
+
+           END-IF
+      * End card date check tests
+
+
+      * We should not get here - SQL call faild in DKMSKSA, however
+      * all SQL tests were successful.
+           MOVE '99' TO KSA-PROGRAM-LOCATION
+           MOVE DAPI-ERR-KSKEY-NOTFOUND TO KSA-RETURN-CODE
+           IF FLAG-KEYSET-DEFAULT
+            MOVE DAPI-ERR-KSKEYDEF-NOTFOUND TO KSA-RETURN-CODE
+           END-IF
+           IF FLAG-KEYSET-NOINDEX
+            MOVE DAPI-ERR-KSKEYNOIX-NOTFOUND TO KSA-RETURN-CODE
+           END-IF
+           MOVE 255                     TO KSA-REASON-CODE
+           MOVE WS-KSA-FNDK-KEYSET-ID   TO KSA-RETURN-TEXT
+           STRING WS-KSA-FNDK-KEY-TYPE ' '
+                  WS-KSA-FNDK-WORK-INDEXX ' '
+                                        DELIMITED BY SIZE INTO
+                                               KSA-RETURN-INFO
+
+           .
+       EXIT-CA-FND-KEY.
+           IF  DEBUG-ON
+               DISPLAY WS-DBUG 'EXIT SQL TESTS'
+           END-IF
+           EXIT.
+
+       END PROGRAM "KSADB100".

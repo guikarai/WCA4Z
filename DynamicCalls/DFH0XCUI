@@ -1,0 +1,819 @@
+             CBL CICS('COBOL3') APOST                                           
+      *****************************************************************         
+      *                                                               *         
+      *  MODULE NAME = DFH0XCUI                                       *         
+      *                                                               *         
+      *  DESCRIPTIVE NAME = CICS TS  (Samples) Example Application -  *         
+      *                     BMS manager for Web Service Client        *         
+      *                                                               *         
+      *                                                               *         
+      *                                                               *         
+      *      Licensed Materials - Property of IBM                     *         
+      *                                                               *         
+      *      "Restricted Materials of IBM"                            *         
+      *                                                               *         
+      *      5655-Y04                                                 *         
+      *                                                               *         
+      *      (C) Copyright IBM Corp. 2005, 2008"                      *         
+      *                                                               *         
+      *                                                               *         
+      *                                                               *         
+      *                                                               *         
+      *  STATUS = 7.0.0                                               *         
+      *                                                               *         
+      *  TRANSACTION NAME = n/a                                       *         
+      *                                                               *         
+      *  FUNCTION =                                                   *         
+      *  This module handles the BMS interactions for the CICS Web    *         
+      *  Service client for the Example Application                   *         
+      *                                                               *         
+      *-------------------------------------------------------------  *         
+      *                                                               *         
+      *  ENTRY POINT = DFH0XCUI                                       *         
+      *                                                               *         
+      *-------------------------------------------------------------  *         
+      *                                                               *         
+      *  CHANGE ACTIVITY :                                            *         
+      *                                                               *         
+      *       $MOD(DFH0XCUI),COMP(SAMPLES),PROD(CICS TS ):            *         
+      *                                                               *         
+      *   PN= REASON REL YYMMDD HDXXIII : REMARKS                     *         
+      *  $D0= I07544 640 050113 HDIPCB  : ExampleApp CICS client code *         
+      *  $D1= I07544 640 050208 HDIPCB  : Definitions for Example App *         
+      *  $P2= D20555 660 080417 HDFFCMS : Typos in Web Service Example*         
+      *                                                               *         
+       IDENTIFICATION DIVISION.                                                 
+       PROGRAM-ID. DFH0XCUI.                                                    
+       ENVIRONMENT DIVISION.                                                    
+       CONFIGURATION SECTION.                                                   
+       DATA DIVISION.                                                           
+       WORKING-STORAGE SECTION.                                                 
+      *----------------------------------------------------------------*        
+      * Common defintions                                              *        
+      *----------------------------------------------------------------*        
+      * Run time (debug) infomation for this invocation                         
+        01  WS-HEADER.                                                          
+           03 WS-EYECATCHER            PIC X(16)                                
+                                        VALUE 'DFH0XCUI------WS'.               
+           03 WS-TRANSID               PIC X(4).                                
+           03 WS-TERMID                PIC X(4).                                
+           03 WS-TASKNUM               PIC 9(7).                                
+           03 WS-CALEN                 PIC S9(4) COMP.                          
+                                                                                
+      * Variables for time/date processing                                      
+       01  ABS-TIME                    PIC S9(8) COMP VALUE +0.                 
+       01  TIME1                       PIC X(8)  VALUE SPACES.                  
+       01  DATE1                       PIC X(10) VALUE SPACES.                  
+                                                                                
+      * Error Message structure                                                 
+       01  ERROR-MSG.                                                           
+           03 EM-DATE                  PIC X(8)  VALUE SPACES.                  
+           03 FILLER                   PIC X     VALUE SPACES.                  
+           03 EM-TIME                  PIC X(6)  VALUE SPACES.                  
+           03 FILLER                   PIC X(9)  VALUE ' DFH0XCUI'.             
+           03 EM-DETAIL                PIC X(50) VALUE SPACES.                  
+                                                                                
+      * Key into the configuration file                                         
+       01 EXAMPLE-APP-CONFIG           PIC X(9)                                 
+               VALUE 'EXMP-CONF'.                                               
+                                                                                
+       01 PROGRAM-EXIT-MESSAGE         PIC X(43)                                
+               VALUE 'Thank You for using the Catalog Application'.             
+                                                                                
+       01 CONSTANTS.                                                            
+           03 LINK-COMMAREA-LENGTH     PIC S9(4) COMP VALUE 998.                
+                                                                                
+       01 WORKING-VARIABLES.                                                    
+           03 WS-LOOP-COUNTER          PIC S9(4) COMP.                          
+           03 DATA-VALID-FLAG          PIC X   VALUE '1'.                       
+               88 DATA-VALID                   VALUE '1'.                       
+               88 DATA-INVALID                 VALUE '2'.                       
+                                                                                
+      * Working storage copy of the Communication Area                          
+       01 WS-COMMAREA.                                                          
+           COPY DFH0XCP1.                                                       
+           03 FLAGS.                                                            
+               05 PROCESSING-MAP-FLAG      PIC X   VALUE '1'.                   
+                   88 PROCESSING-MENU-MAP          VALUE '1'.                   
+                   88 PROCESSING-INQ-MAP           VALUE '2'.                   
+                   88 PROCESSING-ORDER-MAP         VALUE '3'.                   
+               05 ORDER-SELECT-FLAG        PIC X   VALUE '2'.                   
+                   88 ORDER-REQ-FOUND              VALUE '1'.                   
+                   88 ORDER-REQ-NOT-FOUND          VALUE '2'.                   
+               05 DEBUG-FLAG               PIC X   VALUE '1'.                   
+                   88 DEBUG-ON                     VALUE '1'.                   
+                   88 DEBUG-OFF                    VALUE '2'.                   
+               05 INQ-SCROLL-FLAG          PIC X   VALUE '2'.                   
+                   88 DATA-SCROLLED                VALUE '1'.                   
+                   88 DATA-NOT-SCROLLED            VALUE '2'.                   
+                                                                                
+           03 SWITCHES.                                                         
+               05 SEND-SWITCH              PIC X   VALUE '1'.                   
+                   88 SEND-ERASE                   VALUE '1'.                   
+                   88 SEND-DATAONLY                VALUE '2'.                   
+                   88 SEND-ALARM                   VALUE '3'.                   
+                                                                                
+           03 WS-VARIABLES.                                                     
+               05 WS-WEBSERVICE-CLIENT-PROG    PIC X(8)                         
+                                                   VALUE 'DFH0XECC'.            
+               05 WS-ORDER-ITEM-REF            PIC X(4)  VALUE SPACES.          
+               05 WS-INQ-START-ITEM-REF        PIC X(4)  VALUE SPACES.          
+               05 WS-INQ-ITEM-LIST-DEPTH       PIC S9(4) COMP VALUE 1.          
+               05 WS-INQ-ITEM-LIST-CURRENT     PIC S9(4) COMP VALUE 1.          
+               05 WS-INQ-QNAME                 PIC X(10) VALUE SPACES.          
+                                                                                
+                                                                                
+       01 DEBUG.                                                                
+           03 DEBUG-STRING             PIC X(150)  VALUE SPACES.                
+           03 DEBUG-NUMERIC            PIC S9(4)   USAGE DISPLAY.               
+                                                                                
+                                                                                
+       COPY DFH0XM1.                                                            
+       COPY DFH0XM2U.                                                           
+                                                                                
+       COPY DFHAID.                                                             
+                                                                                
+      *----------------------------------------------------------------*        
+                                                                                
+      ******************************************************************        
+      *    L I N K A G E   S E C T I O N                                        
+      ******************************************************************        
+       LINKAGE SECTION.                                                         
+                                                                                
+       01 DFHCOMMAREA.                                                          
+           03 LINK-COMMAREA            PIC X(998).                              
+           03 WORKING-STORAGE-DATA     PIC X(42).                               
+                                                                                
+                                                                                
+      ******************************************************************        
+      *    P R O C E D U R E S                                                  
+      ******************************************************************        
+       PROCEDURE DIVISION.                                                      
+                                                                                
+      *----------------------------------------------------------------*        
+       MAINLINE SECTION.                                                        
+                                                                                
+      *----------------------------------------------------------------*        
+      * Common code                                                    *        
+      *----------------------------------------------------------------*        
+      * initialize working storage variables                                    
+           INITIALIZE ERROR-MSG.                                                
+                                                                                
+      * set up general variable                                                 
+           MOVE EIBTRNID TO WS-TRANSID.                                         
+           MOVE EIBTRMID TO WS-TERMID.                                          
+           MOVE EIBTASKN TO WS-TASKNUM.                                         
+                                                                                
+           IF EIBCALEN EQUAL ZERO                                               
+      *    First invocation                                                     
+      *    Set up name of inquire queue used to support scrolling               
+               STRING WS-TERMID 'EXIQ'                                          
+                   DELIMITED BY SIZE                                            
+                   INTO WS-INQ-QNAME                                            
+               END-STRING                                                       
+           END-IF                                                               
+                                                                                
+                                                                                
+           IF EIBCALEN > ZERO                                                   
+               MOVE DFHCOMMAREA TO WS-COMMAREA                                  
+               MOVE LOW-VALUE TO EXMENUO                                        
+               MOVE LOW-VALUE TO EXORDRO                                        
+               MOVE LOW-VALUE TO EXINQCO                                        
+      *        Read in configuration file and set up program names              
+           END-IF                                                               
+                                                                                
+           EXEC CICS IGNORE CONDITION MAPFAIL END-EXEC                          
+                                                                                
+      *-----------------------------------------------------------------        
+      * Check which operation is being requested                                
+      *----------------------------------------------------------------*        
+                                                                                
+           EVALUATE TRUE                                                        
+               WHEN EIBCALEN EQUAL ZERO                                         
+      *        First Invocation - set up commarea and send main menu            
+      *        Set up switches                                                  
+                   SET SEND-ERASE TO TRUE                                       
+                   MOVE LOW-VALUE TO EXMENUO                                    
+                   PERFORM SEND-MAIN-MENU                                       
+                                                                                
+               WHEN EIBAID EQUAL DFHCLEAR                                       
+      *        Clear key pressed - clear data on map                            
+                   PERFORM CLEAR-MAP                                            
+                                                                                
+               WHEN EIBAID EQUAL DFHPA1 OR DFHPA2 OR DFHPA3                     
+      *        Attention keys - do nothing special                              
+                                                                                
+               WHEN EIBAID EQUAL DFHPF3                                         
+      *        Exit application                                                 
+                   PERFORM APPLICATION-EXIT                                     
+                                                                                
+               WHEN EIBAID EQUAL DFHPF7                                         
+      *        Inquiry menu scroll backwards                                    
+                   IF PROCESSING-INQ-MAP                                        
+                       PERFORM PROCESS-INQUIRY-MAP-PREVIOUS                     
+                   ELSE                                                         
+      *                                                            $P2C         
+                       MOVE 'OPTION NOT RECOGNIZED' TO MSG1O                    
+                       PERFORM INVALID-MENU-INPUT                               
+                   END-IF                                                       
+                                                                                
+               WHEN EIBAID EQUAL DFHPF8                                         
+      *        Inquiry menu scroll backwards                                    
+                   IF PROCESSING-INQ-MAP                                        
+                       PERFORM PROCESS-INQUIRY-MAP-NEXT                         
+                   ELSE                                                         
+      *                                                            $P2C         
+                       MOVE 'OPTION NOT RECOGNIZED' TO MSG1O                    
+                       PERFORM INVALID-MENU-INPUT                               
+                   END-IF                                                       
+                                                                                
+               WHEN EIBAID EQUAL DFHPF12                                        
+      *        Cancel request                                                   
+      *          If on main menu - exit                                         
+                   IF PROCESSING-MENU-MAP                                       
+                       PERFORM APPLICATION-EXIT                                 
+      *          Else - send main menu map                                      
+                   ELSE                                                         
+      *                If on inquiry panel delete data used for scrolls         
+                       IF PROCESSING-INQ-MAP                                    
+                           PERFORM DELETE-INQ-Q                                 
+                       END-IF                                                   
+                                                                                
+                       SET SEND-ERASE TO TRUE                                   
+                       PERFORM SEND-MAIN-MENU                                   
+                   END-IF                                                       
+                                                                                
+                                                                                
+               WHEN EIBAID EQUAL DFHENTER                                       
+      *        Process input from map                                           
+                   EVALUATE TRUE                                                
+                       WHEN PROCESSING-MENU-MAP                                 
+                           PERFORM PROCESS-MENU-INPUT                           
+                       WHEN PROCESSING-INQ-MAP                                  
+                           PERFORM PROCESS-INQUIRE-INPUT                        
+                       WHEN PROCESSING-ORDER-MAP                                
+                           PERFORM PROCESS-ORDER-INPUT                          
+                   END-EVALUATE                                                 
+                                                                                
+               WHEN OTHER                                                       
+      *        Input not recognised - send error message                        
+                   MOVE 'OPTION NOT RECOGNISED' TO MSG1O                        
+                   PERFORM INVALID-MENU-INPUT                                   
+           END-EVALUATE                                                         
+                                                                                
+      * Return to caller                                                        
+           EXEC CICS RETURN TRANSID(WS-TRANSID)                                 
+                            COMMAREA(WS-COMMAREA)                               
+           END-EXEC.                                                            
+                                                                                
+       MAINLINE-EXIT.                                                           
+           EXIT.                                                                
+      *----------------------------------------------------------------*        
+                                                                                
+      *================================================================*        
+      * Procedure to write error message to TD QUEUE(CSMT)             *        
+      *   message will include Date, Time, Program Name,               *        
+      *   and error details.                                           *        
+      *================================================================*        
+       WRITE-ERROR-MESSAGE.                                                     
+      * Obtain and format current time and date                                 
+           EXEC CICS ASKTIME ABSTIME(ABS-TIME)                                  
+           END-EXEC                                                             
+           EXEC CICS FORMATTIME ABSTIME(ABS-TIME)                               
+                     MMDDYYYY(DATE1)                                            
+                     TIME(TIME1)                                                
+           END-EXEC                                                             
+           MOVE DATE1 TO EM-DATE                                                
+           MOVE TIME1 TO EM-TIME                                                
+      * Write output message to TDQ                                             
+           EXEC CICS WRITEQ TD QUEUE('CSMT')                                    
+                     FROM(ERROR-MSG)                                            
+                     LENGTH(LENGTH OF ERROR-MSG)                                
+           END-EXEC.                                                            
+           EXIT.                                                                
+                                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to send the main menu BMS map                        *        
+      *================================================================*        
+        SEND-MAIN-MENU.                                                         
+           SET PROCESSING-MENU-MAP TO TRUE                                      
+           EVALUATE TRUE                                                        
+               WHEN SEND-ERASE                                                  
+                   EXEC CICS SEND MAP('EXMENU')                                 
+                                  MAPSET('DFH0XS1')                             
+                                  FROM (EXMENUO)                                
+                                  ERASE                                         
+                   END-EXEC                                                     
+               WHEN SEND-DATAONLY                                               
+                   EXEC CICS SEND MAP('EXMENU')                                 
+                                  MAPSET('DFH0XS1')                             
+                                  FROM(EXMENUO)                                 
+                                  DATAONLY                                      
+                   END-EXEC                                                     
+               WHEN SEND-ALARM                                                  
+                   EXEC CICS SEND MAP('EXMENU')                                 
+                                  MAPSET('DFH0XS1')                             
+                                  FROM(EXMENUO)                                 
+                                  ERASE                                         
+                                  ALARM                                         
+                   END-EXEC                                                     
+           END-EVALUATE                                                         
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to send the order panel BMS map                      *        
+      *================================================================*        
+        SEND-ORDER-PANEL.                                                       
+                                                                                
+           SET PROCESSING-ORDER-MAP TO TRUE                                     
+           EVALUATE TRUE                                                        
+               WHEN SEND-ERASE                                                  
+                   EXEC CICS SEND MAP('EXORDR')                                 
+                                  MAPSET('DFH0XS1')                             
+                                  FROM (EXORDRO)                                
+                                  ERASE                                         
+                   END-EXEC                                                     
+               WHEN SEND-DATAONLY                                               
+                   EXEC CICS SEND MAP('EXORDR')                                 
+                                  MAPSET('DFH0XS1')                             
+                                  FROM(EXORDRO)                                 
+                                  DATAONLY                                      
+                   END-EXEC                                                     
+               WHEN SEND-ALARM                                                  
+                   EXEC CICS SEND MAP('EXORDR')                                 
+                                  MAPSET('DFH0XS1')                             
+                                  FROM(EXORDRO)                                 
+                                  DATAONLY                                      
+                                  ALARM                                         
+                   END-EXEC                                                     
+           END-EVALUATE                                                         
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to send the inquire panel BMS map                    *        
+      *================================================================*        
+        SEND-INQUIRE-PANEL.                                                     
+           SET PROCESSING-INQ-MAP TO TRUE                                       
+           EVALUATE TRUE                                                        
+               WHEN SEND-ERASE                                                  
+                   EXEC CICS SEND MAP('EXINQC')                                 
+                                  MAPSET('DFH0XS2')                             
+                                  FROM (EXINQCO)                                
+                                  ERASE                                         
+                   END-EXEC                                                     
+               WHEN SEND-DATAONLY                                               
+                   EXEC CICS SEND MAP('EXINQC')                                 
+                                  MAPSET('DFH0XS2')                             
+                                  FROM(EXINQCO)                                 
+                                  DATAONLY                                      
+                   END-EXEC                                                     
+               WHEN SEND-ALARM                                                  
+                   EXEC CICS SEND MAP('EXINQC')                                 
+                                  MAPSET('DFH0XS2')                             
+                                  FROM(EXINQCO)                                 
+                                  DATAONLY                                      
+                                  ALARM                                         
+                   END-EXEC                                                     
+           END-EVALUATE                                                         
+           EXIT.                                                                
+                                                                                
+                                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to terminate the application and exit                *        
+      *================================================================*        
+        APPLICATION-EXIT.                                                       
+           IF PROCESSING-INQ-MAP                                                
+               PERFORM DELETE-INQ-Q                                             
+           END-IF                                                               
+           EXEC CICS SEND TEXT FROM(PROGRAM-EXIT-MESSAGE)                       
+                     ERASE                                                      
+                     FREEKB                                                     
+           END-EXEC                                                             
+           EXEC CICS RETURN END-EXEC                                            
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to clear the user entered data and redisplay map     *        
+      *================================================================*        
+        CLEAR-MAP.                                                              
+           EVALUATE TRUE                                                        
+               WHEN PROCESSING-MENU-MAP                                         
+                   MOVE LOW-VALUE TO EXMENUO                                    
+                   SET SEND-ERASE TO TRUE                                       
+                   PERFORM SEND-MAIN-MENU                                       
+               WHEN PROCESSING-INQ-MAP                                          
+                   MOVE LOW-VALUE TO EXINQCO                                    
+                   PERFORM POPULATE-INQUIRE-MAP                                 
+                   SET SEND-ERASE TO TRUE                                       
+                   PERFORM SEND-INQUIRE-PANEL                                   
+               WHEN PROCESSING-ORDER-MAP                                        
+                   MOVE 1 TO WS-LOOP-COUNTER                                    
+                   MOVE LOW-VALUE TO EXORDRO                                    
+                   MOVE CA-ITEM-REF(WS-LOOP-COUNTER) TO ORDR-ITEMREFO           
+                   MOVE CA-DESCRIPTION(WS-LOOP-COUNTER)                         
+                           TO ORDR-DESCO                                        
+                   MOVE CA-COST(WS-LOOP-COUNTER) TO  ORDR-COSTO                 
+                   INSPECT ORDR-COSTO REPLACING LEADING '0' BY ' '              
+                                                                                
+                   MOVE IN-STOCK(WS-LOOP-COUNTER) TO ORDR-STKO                  
+                   MOVE ON-ORDER(WS-LOOP-COUNTER) TO ORDR-ORDO                  
+                   SET SEND-ERASE TO TRUE                                       
+                   PERFORM SEND-ORDER-PANEL                                     
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to process the input from the main menu panel        *        
+      *================================================================*        
+        PROCESS-MENU-INPUT.                                                     
+                                                                                
+           EXEC CICS RECEIVE MAP('EXMENU')                                      
+                             MAPSET('DFH0XS1')                                  
+                             INTO(EXMENUI)                                      
+           END-EXEC                                                             
+                                                                                
+           IF ACTIONI EQUAL SPACES                                              
+               MOVE 'INVALID OPTION: PLEASE SELECT 1, 2 OR 3' TO MSG1O          
+                   PERFORM INVALID-MENU-INPUT                                   
+           ELSE                                                                 
+                                                                                
+                                                                                
+                                                                                
+               EVALUATE ACTIONI                                                 
+                   WHEN '1'                                                     
+      *            Process inquire of catalog                                   
+                       PERFORM PROCESS-MENU-INQUIRE-REQUEST                     
+                   WHEN '2'                                                     
+      *            Process Order Item                                           
+                       PERFORM PROCESS-MENU-ORDER-REQUEST                       
+                   WHEN '3'                                                     
+      *            Exit application                                             
+                       PERFORM APPLICATION-EXIT                                 
+                   WHEN OTHER                                                   
+                       MOVE 'INVALID OPTION: PLEASE SELECT 1, 2 OR 3'           
+                               TO MSG1O                                         
+                       PERFORM INVALID-MENU-INPUT                               
+               END-EVALUATE                                                     
+           END-IF                                                               
+           EXIT.                                                                
+      *================================================================*        
+      * Procedure to process the input from the inquire panel          *        
+      *================================================================*        
+        PROCESS-MENU-INQUIRE-REQUEST.                                           
+           PERFORM INITIALIZE-LINK-COMMAREA                                     
+           MOVE 0000 TO WS-INQ-START-ITEM-REF                                   
+                                                                                
+           PERFORM CATALOG-INQUIRE                                              
+                                                                                
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to process the input from the order panel            *        
+      *================================================================*        
+        PROCESS-MENU-ORDER-REQUEST.                                             
+           INSPECT ITEM-REFI REPLACING LEADING ' ' BY ZERO                      
+                                                                                
+           EVALUATE TRUE                                                        
+               WHEN ITEM-REFI EQUAL LOW-VALUE OR SPACE                          
+                   MOVE 'TO PLACE ORDER PLEASE ENTER A VALID ITEM REF'          
+                       TO MSG1O                                                 
+                   PERFORM INVALID-MENU-INPUT                                   
+               WHEN ITEM-REFI NOT NUMERIC                                       
+                   MOVE 'TO PLACE ORDER PLEASE ENTER A VALID ITEM REF'          
+                       TO MSG1O                                                 
+                   PERFORM INVALID-MENU-INPUT                                   
+               WHEN OTHER                                                       
+                   PERFORM INITIALIZE-LINK-COMMAREA                             
+                   MOVE '01INQS' TO CA-REQUEST-ID                               
+                   MOVE ITEM-REFI TO CA-ITEM-REF-REQ                            
+                   EXEC CICS LINK PROGRAM(WS-WEBSERVICE-CLIENT-PROG)            
+                                  COMMAREA(WS-COMMAREA)                         
+                                  DATALENGTH(LINK-COMMAREA-LENGTH)              
+                   END-EXEC                                                     
+                                                                                
+               IF CA-RETURN-CODE EQUAL '00'                                     
+                       MOVE LOW-VALUE TO EXORDRO                                
+                       MOVE ITEM-REFI TO ORDR-ITEMREFO                          
+                       MOVE CA-SNGL-DESCRIPTION TO ORDR-DESCO                   
+                                                                                
+                       MOVE CA-SNGL-COST TO  ORDR-COSTO                         
+                       INSPECT ORDR-COSTO REPLACING LEADING '0' BY ' '          
+                                                                                
+                       MOVE IN-SNGL-STOCK TO ORDR-STKO                          
+                       MOVE ON-SNGL-ORDER TO ORDR-ORDO                          
+                                                                                
+                       MOVE ITEM-REFI TO WS-ORDER-ITEM-REF                      
+                                                                                
+                       SET SEND-ERASE TO TRUE                                   
+                       PERFORM SEND-ORDER-PANEL                                 
+                   ELSE                                                         
+                       MOVE CA-RESPONSE-MESSAGE TO MSG1O                        
+                       PERFORM INVALID-MENU-INPUT                               
+                   END-IF                                                       
+           END-EVALUATE                                                         
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+           EXIT.                                                                
+      *================================================================*        
+      * Procedure to handle unknown input on the main menu             *        
+      *================================================================*        
+        INVALID-MENU-INPUT.                                                     
+           SET SEND-ALARM TO TRUE                                               
+           PERFORM SEND-MAIN-MENU                                               
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to handle errors from the order panel                *        
+      *================================================================*        
+        ORDER-ERROR.                                                            
+                                                                                
+           SET SEND-ALARM TO TRUE                                               
+           PERFORM SEND-ORDER-PANEL                                             
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to link to Datastore program to inquire              *        
+      *   on the catalog data                                          *        
+      *================================================================*        
+        CATALOG-INQUIRE.                                                        
+                                                                                
+           MOVE '01INQC' TO CA-REQUEST-ID                                       
+           MOVE WS-INQ-START-ITEM-REF TO CA-LIST-START-REF                      
+                                                                                
+           EXEC CICS LINK PROGRAM(WS-WEBSERVICE-CLIENT-PROG)                    
+                          COMMAREA(WS-COMMAREA)                                 
+                          DATALENGTH(LINK-COMMAREA-LENGTH)                      
+           END-EXEC                                                             
+                                                                                
+           IF CA-RETURN-CODE EQUAL 00                                           
+                                                                                
+               MOVE LOW-VALUE TO EXINQCO                                        
+               PERFORM POPULATE-INQUIRE-MAP                                     
+                                                                                
+               SET SEND-ERASE TO TRUE                                           
+               PERFORM SEND-INQUIRE-PANEL                                       
+           ELSE                                                                 
+               MOVE CA-RESPONSE-MESSAGE TO MSG1O                                
+               PERFORM INVALID-MENU-INPUT                                       
+           END-IF                                                               
+                                                                                
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to process the input from the inquire panel          *        
+      *================================================================*        
+        PROCESS-INQUIRE-INPUT.                                                  
+      *    Receive the map                                                      
+           EXEC CICS RECEIVE MAP('EXINQC')                                      
+                             MAPSET('DFH0XS2')                                  
+                             INTO(EXINQCI)                                      
+           END-EXEC                                                             
+                                                                                
+      *    Check to see if any of the select markers have been checked          
+           SET ORDER-REQ-NOT-FOUND TO TRUE                                      
+           SET DATA-VALID TO TRUE                                               
+           PERFORM                                                              
+           WITH TEST AFTER                                                      
+           VARYING WS-LOOP-COUNTER FROM 1 BY 1                                  
+           UNTIL ORDER-REQ-FOUND OR                                             
+                 WS-LOOP-COUNTER EQUAL 15                                       
+                                                                                
+               IF INQ-ORDI(WS-LOOP-COUNTER) EQUAL '/'                           
+      *        Item selected - Inquire again to check details                   
+                   SET ORDER-REQ-FOUND TO TRUE                                  
+                                                                                
+      *            Check to make sure there is an item for this select          
+                   IF CA-ITEM-REF(WS-LOOP-COUNTER) NOT NUMERIC                  
+                       SET DATA-INVALID TO TRUE                                 
+                   ELSE                                                         
+                       MOVE CA-ITEM-REF(WS-LOOP-COUNTER)                        
+                                   TO WS-ORDER-ITEM-REF                         
+                                                                                
+                       PERFORM INITIALIZE-LINK-COMMAREA                         
+                       MOVE '01INQS' TO CA-REQUEST-ID                           
+                       MOVE WS-ORDER-ITEM-REF TO CA-ITEM-REF-REQ                
+                       EXEC CICS LINK PROGRAM(WS-WEBSERVICE-CLIENT-PROG)        
+                                      COMMAREA(WS-COMMAREA)                     
+                                      DATALENGTH(LINK-COMMAREA-LENGTH)          
+                       END-EXEC                                                 
+                                                                                
+                       IF CA-RETURN-CODE EQUAL '00'                             
+                           MOVE LOW-VALUE TO EXORDRO                            
+                           MOVE CA-SNGL-ITEM-REF TO ORDR-ITEMREFO               
+                           MOVE CA-SNGL-DESCRIPTION TO ORDR-DESCO               
+                           MOVE CA-SNGL-COST TO  ORDR-COSTO                     
+                           INSPECT ORDR-COSTO                                   
+                               REPLACING LEADING '0' BY ' '                     
+                           MOVE IN-SNGL-STOCK TO ORDR-STKO                      
+                           MOVE ON-SNGL-ORDER TO ORDR-ORDO                      
+                                                                                
+      *                    Clean up data used for scrolling inquire             
+                           PERFORM DELETE-INQ-Q                                 
+                                                                                
+                           SET SEND-ERASE TO TRUE                               
+                           PERFORM SEND-ORDER-PANEL                             
+                       ELSE                                                     
+                           MOVE CA-RESPONSE-MESSAGE TO MSG1O                    
+                           PERFORM INVALID-MENU-INPUT                           
+                       END-IF                                                   
+                   END-IF                                                       
+               END-IF                                                           
+           END-PERFORM                                                          
+                                                                                
+           IF ORDER-REQ-NOT-FOUND OR DATA-INVALID                               
+               MOVE LOW-VALUE TO EXINQCO                                        
+               PERFORM POPULATE-INQUIRE-MAP                                     
+               MOVE 'PLEASE SELECT AN ITEM TO ORDER WITH A /'                   
+                    TO INQC-MSGO                                                
+               SET SEND-ERASE TO TRUE                                           
+               PERFORM SEND-INQUIRE-PANEL                                       
+           END-IF                                                               
+                                                                                
+                                                                                
+           EXIT.                                                                
+      *================================================================*        
+      * Procedure to populate the map data from the commarea           *        
+      *================================================================*        
+        POPULATE-INQUIRE-MAP.                                                   
+           PERFORM                                                              
+           WITH TEST AFTER                                                      
+           VARYING  WS-LOOP-COUNTER FROM 1 BY 1                                 
+           UNTIL WS-LOOP-COUNTER EQUAL CA-ITEM-COUNT                            
+              MOVE CA-ITEM-REF(WS-LOOP-COUNTER)                                 
+                    TO INQ-ITEMREFO(WS-LOOP-COUNTER)                            
+              MOVE CA-DESCRIPTION(WS-LOOP-COUNTER)                              
+                    TO INQ-DESCO(WS-LOOP-COUNTER)                               
+                                                                                
+              MOVE CA-COST(WS-LOOP-COUNTER)                                     
+                    TO INQ-COSTO(WS-LOOP-COUNTER)                               
+                                                                                
+              INSPECT INQ-COSTO(WS-LOOP-COUNTER)                                
+                    REPLACING LEADING '0' BY ' '                                
+                                                                                
+           END-PERFORM                                                          
+           EXIT.                                                                
+                                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to process the input from the order panel            *        
+      *================================================================*        
+        PROCESS-ORDER-INPUT.                                                    
+           EXEC CICS RECEIVE MAP('EXORDR')                                      
+                             MAPSET('DFH0XS1')                                  
+                             INTO(EXORDRI)                                      
+           END-EXEC                                                             
+                                                                                
+      * Check input data is valid                                               
+                                                                                
+           SET DATA-VALID TO TRUE                                               
+                                                                                
+           INSPECT ORDR-QUANTITYI REPLACING LEADING ' ' BY ZERO                 
+                                                                                
+           IF ORDR-QUANTITYI NOT NUMERIC                                        
+            OR ORDR-QUANTITYI NOT GREATER THAN ZERO                             
+               MOVE 'TO PLACE ORDER PLEASE ENTER A VALID QUANTITY'              
+                   TO ORDR-MSGO                                                 
+               SET DATA-INVALID TO TRUE                                         
+           END-IF                                                               
+                                                                                
+           IF ORDR-USERIDL EQUAL ZERO                                           
+               OR ORDR-DEPTL EQUAL ZERO                                         
+               OR ORDR-USERIDI EQUAL SPACE                                      
+               OR ORDR-DEPTI EQUAL SPACE                                        
+               MOVE 'TO PLACE ORDER PLEASE ENTER A VALID USERID AND DEPA        
+      -             'RTMENT'                                                    
+                   TO ORDR-MSGO                                                 
+               SET DATA-INVALID TO TRUE                                         
+           END-IF                                                               
+                                                                                
+                                                                                
+           IF DATA-VALID                                                        
+               PERFORM INITIALIZE-LINK-COMMAREA                                 
+                                                                                
+               MOVE '01ORDR' TO CA-REQUEST-ID                                   
+                                                                                
+               MOVE ORDR-USERIDI TO CA-USERID                                   
+               MOVE ORDR-DEPTI TO CA-CHARGE-DEPT                                
+               MOVE WS-ORDER-ITEM-REF TO CA-ITEM-REF-NUMBER                     
+               MOVE ORDR-QUANTITYI TO CA-QUANTITY-REQ                           
+                                                                                
+               EXEC CICS LINK PROGRAM(WS-WEBSERVICE-CLIENT-PROG)                
+                              COMMAREA(WS-COMMAREA)                             
+                              DATALENGTH(LINK-COMMAREA-LENGTH)                  
+               END-EXEC                                                         
+                                                                                
+               IF CA-RETURN-CODE EQUAL '97'                                     
+      *        Insufficient stock to complete order                             
+                   MOVE 'INSUFFICIENT STOCK TO COMPLETE ORDER'                  
+                       TO ORDR-MSGO                                             
+                   PERFORM ORDER-ERROR                                          
+               ELSE                                                             
+                   MOVE CA-RESPONSE-MESSAGE TO MSG1O                            
+                   SET SEND-ERASE TO TRUE                                       
+                   PERFORM SEND-MAIN-MENU                                       
+               END-IF                                                           
+           ELSE                                                                 
+               PERFORM ORDER-ERROR                                              
+           END-IF                                                               
+                                                                                
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to initialize the commarea prior to requests         *        
+      *================================================================*        
+        INITIALIZE-LINK-COMMAREA.                                               
+           MOVE LOW-VALUE TO CA-REQUEST-ID                                      
+           MOVE 00 TO CA-RETURN-CODE                                            
+           MOVE LOW-VALUE TO CA-RESPONSE-MESSAGE                                
+           INITIALIZE CA-REQUEST-SPECIFIC                                       
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to scroll forwards on the inquire map                *        
+      *================================================================*        
+        PROCESS-INQUIRY-MAP-PREVIOUS.                                           
+           IF WS-INQ-ITEM-LIST-CURRENT EQUAL 1                                  
+      *        We are on the first panel so cannot scroll back                  
+               PERFORM POPULATE-INQUIRE-MAP                                     
+               MOVE 'START OF DATA' TO INQC-MSGO                                
+               SET SEND-ERASE TO TRUE                                           
+               PERFORM SEND-INQUIRE-PANEL                                       
+           ELSE                                                                 
+      *        Scroll back to previous panel                                    
+               SUBTRACT 1 FROM WS-INQ-ITEM-LIST-CURRENT                         
+               EXEC CICS READQ TS QUEUE(WS-INQ-QNAME)                           
+                                  ITEM(WS-INQ-ITEM-LIST-CURRENT)                
+                                  INTO(WS-INQ-START-ITEM-REF)                   
+               END-EXEC                                                         
+                                                                                
+               PERFORM CATALOG-INQUIRE                                          
+                                                                                
+                                                                                
+           END-IF                                                               
+                                                                                
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to scroll forwards on the inquire map                *        
+      *================================================================*        
+        PROCESS-INQUIRY-MAP-NEXT.                                               
+           IF DATA-NOT-SCROLLED                                                 
+      *    First time scrolling - set flag and inital value in list             
+               SET DATA-SCROLLED TO TRUE                                        
+               EXEC CICS WRITEQ TS QUEUE(WS-INQ-QNAME)                          
+                                FROM(WS-INQ-START-ITEM-REF)                     
+               END-EXEC                                                         
+           END-IF                                                               
+                                                                                
+           IF CA-ITEM-COUNT LESS THAN 15                                        
+               PERFORM POPULATE-INQUIRE-MAP                                     
+               MOVE 'END OF DATA' TO INQC-MSGO                                  
+               SET SEND-ERASE TO TRUE                                           
+               PERFORM SEND-INQUIRE-PANEL                                       
+           ELSE                                                                 
+               IF WS-INQ-ITEM-LIST-CURRENT EQUAL WS-INQ-ITEM-LIST-DEPTH         
+                   MOVE CA-LAST-ITEM-REF TO WS-INQ-START-ITEM-REF               
+      *            Add current first item in list to the inq queue              
+                   EXEC CICS WRITEQ TS QUEUE(WS-INQ-QNAME)                      
+                                    FROM(WS-INQ-START-ITEM-REF)                 
+                   END-EXEC                                                     
+                   ADD 1 TO WS-INQ-ITEM-LIST-DEPTH                              
+                   ADD 1 TO WS-INQ-ITEM-LIST-CURRENT                            
+               ELSE                                                             
+                   ADD 1 TO WS-INQ-ITEM-LIST-CURRENT                            
+      *            Read the item-ref to start inquire from the ts queue         
+                   EXEC CICS READQ TS QUEUE(WS-INQ-QNAME)                       
+                                      ITEM(WS-INQ-ITEM-LIST-CURRENT)            
+                                      INTO(WS-INQ-START-ITEM-REF)               
+                   END-EXEC                                                     
+               END-IF                                                           
+               PERFORM CATALOG-INQUIRE                                          
+           END-IF                                                               
+                                                                                
+           EXIT.                                                                
+                                                                                
+      *================================================================*        
+      * Procedure to delete the TS queue of inquiry item refs          *        
+      *================================================================*        
+        DELETE-INQ-Q.                                                           
+           IF DATA-SCROLLED                                                     
+                SET DATA-NOT-SCROLLED TO TRUE                                   
+                MOVE 1 TO WS-INQ-ITEM-LIST-CURRENT                              
+                MOVE 1 TO WS-INQ-ITEM-LIST-DEPTH                                
+                                                                                
+                EXEC CICS DELETEQ TS QUEUE(WS-INQ-QNAME)                        
+                END-EXEC                                                        
+           END-IF                                                               
+           EXIT.                                                                
+                                                                                
+        DEBUG-OUT.                                                              
+           IF DEBUG-ON                                                          
+               EXEC CICS WRITEQ TS  QUEUE('DEBUG-Q')                            
+                                    FROM (DEBUG-STRING)                         
+               END-EXEC                                                         
+           END-IF                                                               
+           EXIT.                                                                
+      *---------------------------------------------------------------*         

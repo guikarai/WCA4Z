@@ -1,0 +1,430 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID.    DKMSRKX.
+      *****************************************************************
+      *                                                               *
+      * DKMSAPI - DKMSRKX                                             *
+      *                                                               *
+      * Export a generated or provided RKX token in one or two        *
+      * instances using Remote Key Export callable service of ICSF.   *
+      *                                                               *
+      * Use this service to export an odd parity DES key in the form  *
+      * as an RKX token in one or two instances controlled by         *
+      * rule-id's of a trusted block. The RKX token can either be     *
+      * generated or provided in the call.                            *
+      *                                                               *
+      * The generated or provided RKX token can be single-length      *
+      * (8 bytes) or double-length (16 bytes), as specified in the    *
+      * associated trusted block.                                     *
+      *                                                               *
+      * The exported keys can be of any type and length controlled by *
+      * rule-id's of the trusted block, which also support export     *
+      * under configurable exporter or importer key variants, or      *
+      * export under another RKX token.                               *
+      *                                                               *
+      * This service does not produce keys in clear form. The one or  *
+      * two exported instances of the key has the same clear value,   *
+      * although this clear value is not exposed outside the secure   *
+      * cryptographic feature.                                        *
+      *                                                               *
+      *****************************************************************
+      * CHANGE LOG                                                    *
+      *****************************************************************
+      * Version 02.01.00           2020-07-20             Erik Pauner *
+      *                                                               *
+      * Added setting of DEBUG-OFF at entry, otherwise second call    *
+      * will always have DEBUG-ON if first call had DEBUG-ON          *
+      *****************************************************************
+      * Version 02.00.00           2016-12-29             Erik Pauner *
+      *                                                   Per Snowman *
+      * Updated API record (copy book: CCCRKX02)                      *
+      *                                                               *
+      * Implemented support for key wrapping override keyword in API. *
+      *                                                               *
+      * Length sanity check of generated/exported key check value     *
+      * changed to accept as little as 4 bytes KCV (as will be the    *
+      * case with the ENC-ZERO algorithm on a single length key).     *
+      *                                                               *
+      *****************************************************************
+      * Version 01.00.00           2007-06-19             Per Snowman *
+      *                                                               *
+      * Initial release - Copy Book: CCCRKX01                         *
+      *                                                               *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+
+       01 COPYRIGHT.
+          03 FILLER PIC X(153) VALUE
+                                  'Licenced Materials - Property of IBM
+      -                                              'DKMSAPI - DKMSRKX
+      -                            '(C) COPYRIGHT IBM CORP. 2007, 2016.
+      -                                           'All Rights Reserved.
+      -                     'US Government Users Restricted Rights - '.
+          03 FILLER PIC X(100) VALUE
+                          'Use, duplication or disclosure restricted by
+      -                   'GSA ADP Schedule Contract with IBM Corp.  '.
+
+       01 PROGINFO.
+          03 THISPROGID                  PIC X(08) VALUE 'DKMSRKX'.
+          03 THISPROGVERSION             PIC X(06) VALUE '020100'.
+          03 THISAUTHOR                  PIC X(10) VALUE 'EAP/IBM-DK'.
+          03 CHANGEDATE                  PIC X(10) VALUE '2020-07-20'.
+
+       01 CSNDRKX                            PIC X(08) VALUE 'CSNDRKX'.
+       01 WS-DBUG                        PIC X(17)
+                                                   VALUE '**RKXAPI DEBUG
+      -                                                  '** '.
+       01 DEBUG-STATUS                   PIC 9.
+          88 DEBUG-OFF                             VALUE 0.
+          88 DEBUG-ON                              VALUE 1.
+
+       01 WS-CRYPTO-FIELDS.
+          03 C-EXIT-DATA-LENGTH              PIC 9(09) COMP.
+          03 C-EXIT-DATA                     PIC X(12).
+          03 C-RULE-ARRAY-COUNT              PIC 9(09) COMP.
+          03 C-RULE-ARRAY                    PIC X(24).
+          03 C-TRUSTED-LABEL-LENGTH          PIC 9(09) COMP.
+          03 C-TRUSTED-LABEL                 PIC X(64).
+          03 C-RULEID-LENGTH                 PIC 9(09) COMP.
+          03 C-RULEID                        PIC X(08).
+          03 C-CERT-LENGTH                   PIC 9(09) COMP.
+          03 C-CERT                          PIC X(10).
+          03 C-CERT-PARM-LENGTH              PIC 9(09) COMP.
+          03 C-CERT-PARM.
+             05 CERTP-OFF-MODULUS            PIC 9(09) COMP.
+             05 CERTP-LGT-MODULUS            PIC 9(09) COMP.
+             05 CERTP-OFF-EXPONENT           PIC 9(09) COMP.
+             05 CERTP-LGT-EXPONENT           PIC 9(09) COMP.
+             05 CERTP-OFF-SIGNATURE          PIC 9(09) COMP.
+             05 CERTP-LGT-SIGNATURE          PIC 9(09) COMP.
+             05 CERTP-HASH-ALGORITHM         PIC X(01).
+             05 CERTP-SIGN-ALGORITHM         PIC X(01).
+             05 FILLER                       PIC X(02).
+             05 CERTP-OFF-HASH               PIC 9(09) COMP.
+             05 CERTP-LGT-HASH               PIC 9(09) COMP.
+          03 C-XPORTKEY-LENGTH               PIC 9(09) COMP.
+          03 C-XPORTKEY                      PIC X(64).
+          03 C-IMPORTKEY-LENGTH              PIC 9(09) COMP.
+          03 C-IMPORTKEY                     PIC X(64).
+          03 C-SOURCEKEY-LENGTH              PIC 9(09) COMP.
+          03 C-SOURCEKEY                     PIC X(64).
+          03 C-ASYM-ENCKEY-LENGTH            PIC 9(09) COMP.
+          03 C-ASYM-ENCKEY                   PIC X(256).
+          03 C-SYM-ENCKEY-LENGTH             PIC 9(09) COMP.
+          03 C-SYM-ENCKEY                    PIC X(64).
+          03 C-EXTRA-LENGTH                  PIC 9(09) COMP.
+          03 C-EXTRA                         PIC X(256).
+          03 C-KCV-PARM-LENGTH               PIC 9(09) COMP.
+          03 C-KCV-PARM                      PIC x(10).
+          03 C-KCV-LENGTH                    PIC 9(09) COMP.
+          03 C-KCV                           PIC X(16).
+
+       01 WS-WRAP-OVERRIDE.
+          03 WS-WRAP-METHOD-1                PIC X(08).
+             88 WS-WRAP-NONE-1        VALUE '        '.
+             88 WS-WRAP-CONF-1        VALUE 'USECONFG'.
+             88 WS-WRAP-ENH-1         VALUE 'WRAP-ENH'.
+             88 WS-WRAP-ECB-1         VALUE 'WRAP-ECB'.
+          03 WS-WRAP-METHOD-2                PIC X(08).
+             88 WS-WRAP-NONE-2        VALUE '        '.
+             88 WS-WRAP-CONF-2        VALUE 'USECONFG'.
+             88 WS-WRAP-ENH-2         VALUE 'WRAP-ENH'.
+             88 WS-WRAP-ECB-2         VALUE 'WRAP-ECB'.
+
+       LINKAGE SECTION.
+
+       COPY CCCRKX02.
+
+       PROCEDURE DIVISION USING DAPI-CCCRKX.
+
+      /****************************************************************
+       STEER SECTION.
+
+           SET DEBUG-OFF TO TRUE
+           IF RKX-DEBUG-ON
+            DISPLAY WS-DBUG 'DKMSRKX API LEVEL       = '
+            THISPROGVERSION ' ' CHANGEDATE
+            SET DEBUG-ON TO TRUE
+           END-IF
+
+           SET RKX-SUCCESS TO TRUE.
+
+           MOVE 0                            TO RKX-RETURN-CODE.
+           MOVE 0                            TO RKX-REASON-CODE.
+           MOVE THISPROGID                   TO RKX-PROGRAM-NAME.
+           MOVE '00'                         TO RKX-PROGRAM-LOCATION.
+           MOVE SPACES                       TO RKX-RETURN-TEXT.
+           MOVE SPACES                       TO RKX-RETURN-INFO.
+
+           IF RKX-GENERATE-AND-EXPORT THEN
+             CONTINUE
+           ELSE
+             SET RKX-API-ERROR               TO TRUE
+             MOVE 01                         TO RKX-RETURN-CODE
+             MOVE '01'                       TO RKX-PROGRAM-LOCATION
+             MOVE 'RKX-FUNCTION Not valid'   TO RKX-RETURN-TEXT
+             GO TO EXIT-STEER
+           END-IF.
+
+           IF RKX-VERSION-NO-01 OR RKX-VERSION-NO-02 THEN
+             CONTINUE
+           ELSE
+             SET RKX-API-ERROR               TO TRUE
+             MOVE 02                         TO RKX-RETURN-CODE
+             MOVE '02'                       TO RKX-PROGRAM-LOCATION
+             MOVE 'RKX-VERSION-NO Not valid' TO RKX-RETURN-TEXT
+             GO TO EXIT-STEER
+           END-IF.
+
+           MOVE LOW-VALUES                   TO RKX-EXPORTED-TOKEN-1.
+           MOVE LOW-VALUES                   TO RKX-EXPORTED-TOKEN-2.
+           MOVE LOW-VALUES                   TO RKX-KCV-GENERATE.
+           MOVE LOW-VALUES                   TO RKX-KCV-EXPORT-1.
+           MOVE LOW-VALUES                   TO RKX-KCV-EXPORT-2.
+
+      *    === CHECK IF WE SUPPORT WRAP OVERRIDE KEYWORDS IN API ===
+
+           IF RKX-VERSION-NO-01 THEN
+             SET  WS-WRAP-NONE-1             TO TRUE
+             SET  WS-WRAP-NONE-2             TO TRUE
+           ELSE
+             MOVE RKX-WRAP-METHOD-1          TO WS-WRAP-METHOD-1
+             MOVE RKX-WRAP-METHOD-2          TO WS-WRAP-METHOD-2
+           END-IF.
+
+           IF RKX-SUCCESS THEN
+             CONTINUE
+           ELSE
+             GO TO EXIT-STEER
+           END-IF.
+
+      *    === GENERATE ===
+           IF DEBUG-ON
+            DISPLAY WS-DBUG 'RKX-TRUSTED-BLOCK-LABEL = '
+                             RKX-TRUSTED-BLOCK-LABEL
+            DISPLAY WS-DBUG 'RKX-GENERATE-RULE-ID    = '
+                             RKX-GENERATE-RULE-ID
+            DISPLAY WS-DBUG 'RKX-EXPORT-RULE-ID-1    = '
+                             RKX-EXPORT-RULE-ID-1
+            DISPLAY WS-DBUG 'RKX-EXPORT-RULE-ID-2    = '
+                             RKX-EXPORT-RULE-ID-2
+            DISPLAY WS-DBUG 'RKX-TRANSPORT-KEY-ID-1  = '
+                             RKX-TRANSPORT-KEY-ID-1
+            DISPLAY WS-DBUG 'RKX-TRANSPORT-KEY-ID-2  = '
+                             RKX-TRANSPORT-KEY-ID-2
+            DISPLAY WS-DBUG 'RKX-RKX-TOKEN           = '
+                             RKX-RKX-TOKEN
+            DISPLAY WS-DBUG 'RKX-WRAP-METHOD-1       = '
+                             RKX-WRAP-METHOD-1
+            DISPLAY WS-DBUG 'RKX-WRAP-METHOD-2       = '
+                             RKX-WRAP-METHOD-2
+           END-IF
+
+           IF RKX-GENERATE-RULE-ID = SPACES THEN
+             CONTINUE
+           ELSE
+             MOVE LOW-VALUES                 TO RKX-RKX-TOKEN
+             MOVE LOW-VALUES                 TO WS-CRYPTO-FIELDS
+             MOVE RKX-TRUSTED-BLOCK-LABEL    TO C-TRUSTED-LABEL
+             MOVE RKX-GENERATE-RULE-ID       TO C-RULEID
+
+             PERFORM REMOTE-KEY-EXPORT
+
+             IF RKX-RETURN-CODE = 0 AND RKX-REASON-CODE = 0 THEN
+               CONTINUE
+             ELSE
+               SET RKX-ICSF-ERROR            TO TRUE
+               MOVE '04'                     TO RKX-PROGRAM-LOCATION
+               STRING 'CSNDRKX GEN. FAILED Rule ' C-RULEID
+                      DELIMITED SIZE       INTO RKX-RETURN-TEXT
+               STRING 'Trusted Block Label=' C-TRUSTED-LABEL
+                      DELIMITED SIZE       INTO RKX-RETURN-INFO
+               GO TO EXIT-STEER
+             END-IF
+
+             IF C-KCV-LENGTH        >= 4  AND
+                C-SYM-ENCKEY-LENGTH = 64    AND
+                C-SYM-ENCKEY(1:1)   = X'02' AND
+                C-SYM-ENCKEY(5:1)   = X'10' AND
+                (C-SYM-ENCKEY(8:1)   = X'18' OR
+                 C-SYM-ENCKEY(8:1)   = X'10') THEN
+               CONTINUE
+             ELSE
+               SET RKX-API-ERROR             TO TRUE
+               MOVE 04                       TO RKX-RETURN-CODE
+               MOVE '05'                     TO RKX-PROGRAM-LOCATION
+               STRING 'CSNDRKX GEN. RESULT Rule ' C-RULEID
+                      DELIMITED SIZE       INTO RKX-RETURN-TEXT
+               STRING 'Trusted Block Label=' C-TRUSTED-LABEL
+                      DELIMITED SIZE       INTO RKX-RETURN-INFO
+               GO TO EXIT-STEER
+             END-IF
+
+             MOVE C-SYM-ENCKEY               TO RKX-RKX-TOKEN
+             MOVE C-KCV                      TO RKX-KCV-GENERATE
+           END-IF.
+
+      *    === EXPORT 1 ===
+
+           IF RKX-EXPORT-RULE-ID-1 = SPACES THEN
+             CONTINUE
+           ELSE
+             MOVE LOW-VALUES                 TO WS-CRYPTO-FIELDS
+             MOVE RKX-TRUSTED-BLOCK-LABEL    TO C-TRUSTED-LABEL
+             MOVE RKX-EXPORT-RULE-ID-1       TO C-RULEID
+             MOVE 64                         TO C-XPORTKEY-LENGTH
+             MOVE RKX-TRANSPORT-KEY-ID-1     TO C-XPORTKEY
+             MOVE 64                         TO C-SOURCEKEY-LENGTH
+             MOVE RKX-RKX-TOKEN              TO C-SOURCEKEY
+
+      *      === CHECK IF WRAP OVERRIDE IS REQUESTED               ===
+
+             IF WS-WRAP-NONE-1 THEN
+               MOVE 0                      TO C-RULE-ARRAY-COUNT
+             ELSE
+      *          -- Override defaulted ENH-WRAP method --
+                 MOVE 1                      TO C-RULE-ARRAY-COUNT
+                 MOVE WS-WRAP-METHOD-1       TO C-RULE-ARRAY
+             END-IF
+
+             PERFORM REMOTE-KEY-EXPORT
+
+             IF RKX-RETURN-CODE = 0 AND RKX-REASON-CODE = 0 THEN
+               CONTINUE
+             ELSE
+               SET RKX-ICSF-ERROR            TO TRUE
+               MOVE '06'                     TO RKX-PROGRAM-LOCATION
+               STRING 'CSNDRKX EXP1 FAILED Rule ' C-RULEID
+                      DELIMITED SIZE       INTO RKX-RETURN-TEXT
+               STRING 'Trusted Block Label=' C-TRUSTED-LABEL
+                      DELIMITED SIZE       INTO RKX-RETURN-INFO
+               GO TO EXIT-STEER
+             END-IF
+
+             IF C-KCV-LENGTH        >= 4  AND
+                C-SYM-ENCKEY-LENGTH  = 64    AND
+                C-SYM-ENCKEY(1:1)    = X'02' THEN
+               CONTINUE
+             ELSE
+               SET RKX-API-ERROR             TO TRUE
+               MOVE 05                       TO RKX-RETURN-CODE
+               MOVE '07'                     TO RKX-PROGRAM-LOCATION
+               STRING 'CSNDRKX EXP1 RESULT Rule ' C-RULEID
+                      DELIMITED SIZE       INTO RKX-RETURN-TEXT
+               STRING 'Trusted Block Label=' C-TRUSTED-LABEL
+                      DELIMITED SIZE       INTO RKX-RETURN-INFO
+               GO TO EXIT-STEER
+             END-IF
+
+             MOVE C-SYM-ENCKEY               TO RKX-EXPORTED-TOKEN-1
+             MOVE C-KCV                      TO RKX-KCV-EXPORT-1
+           END-IF.
+
+      *    === EXPORT 2 ===
+
+           IF RKX-EXPORT-RULE-ID-2 = SPACES THEN
+             CONTINUE
+           ELSE
+             MOVE LOW-VALUES                 TO WS-CRYPTO-FIELDS
+             MOVE RKX-TRUSTED-BLOCK-LABEL    TO C-TRUSTED-LABEL
+             MOVE RKX-EXPORT-RULE-ID-2       TO C-RULEID
+             MOVE 64                         TO C-XPORTKEY-LENGTH
+             MOVE RKX-TRANSPORT-KEY-ID-2     TO C-XPORTKEY
+             MOVE 64                         TO C-SOURCEKEY-LENGTH
+             MOVE RKX-RKX-TOKEN              TO C-SOURCEKEY
+
+      *      === CHECK IF WRAP OVERRIDE IS REQUESTED               ===
+
+             IF WS-WRAP-NONE-2 THEN
+               MOVE 0                      TO C-RULE-ARRAY-COUNT
+             ELSE
+      *          -- Override defaulted ENH-WRAP method --
+                 MOVE 1                      TO C-RULE-ARRAY-COUNT
+                 MOVE WS-WRAP-METHOD-2       TO C-RULE-ARRAY
+             END-IF
+
+             PERFORM REMOTE-KEY-EXPORT
+
+             IF RKX-RETURN-CODE = 0 AND RKX-REASON-CODE = 0 THEN
+               CONTINUE
+             ELSE
+               SET RKX-ICSF-ERROR            TO TRUE
+               MOVE '08'                     TO RKX-PROGRAM-LOCATION
+               STRING 'CSNDRKX EXP2 FAILED Rule ' C-RULEID
+                      DELIMITED SIZE       INTO RKX-RETURN-TEXT
+               STRING 'Trusted Block Label=' C-TRUSTED-LABEL
+                      DELIMITED SIZE       INTO RKX-RETURN-INFO
+               GO TO EXIT-STEER
+             END-IF
+
+             IF C-KCV-LENGTH        >= 4     AND
+                C-SYM-ENCKEY-LENGTH  = 64    AND
+                C-SYM-ENCKEY(1:1)    = X'02' THEN
+               CONTINUE
+             ELSE
+               SET RKX-API-ERROR             TO TRUE
+               MOVE 06                       TO RKX-RETURN-CODE
+               MOVE '09'                     TO RKX-PROGRAM-LOCATION
+               STRING 'CSNDRKX EXP2 RESULT Rule ' C-RULEID
+                      DELIMITED SIZE       INTO RKX-RETURN-TEXT
+               STRING 'Trusted Block Label=' C-TRUSTED-LABEL
+                      DELIMITED SIZE       INTO RKX-RETURN-INFO
+               GO TO EXIT-STEER
+             END-IF
+
+             MOVE C-SYM-ENCKEY               TO RKX-EXPORTED-TOKEN-2
+             MOVE C-KCV                      TO RKX-KCV-EXPORT-2
+           END-IF.
+
+       EXIT-STEER.
+
+           MOVE LOW-VALUES                   TO WS-CRYPTO-FIELDS.
+
+           GOBACK.
+
+      /****************************************************************
+       REMOTE-KEY-EXPORT SECTION.
+
+           MOVE 64                           TO C-TRUSTED-LABEL-LENGTH.
+           MOVE 36                           TO C-CERT-PARM-LENGTH.
+           MOVE  8                           TO C-RULEID-LENGTH.
+           MOVE 64                           TO C-SYM-ENCKEY-LENGTH.
+           MOVE 16                           TO C-KCV-LENGTH.
+
+           CALL CSNDRKX USING RKX-RETURN-CODE
+                             RKX-REASON-CODE
+                             C-EXIT-DATA-LENGTH
+                             C-EXIT-DATA
+                             C-RULE-ARRAY-COUNT
+                             C-RULE-ARRAY
+                             C-TRUSTED-LABEL-LENGTH
+                             C-TRUSTED-LABEL
+                             C-CERT-LENGTH
+                             C-CERT
+                             C-CERT-PARM-LENGTH
+                             C-CERT-PARM
+                             C-XPORTKEY-LENGTH
+                             C-XPORTKEY
+                             C-RULEID-LENGTH
+                             C-RULEID
+                             C-IMPORTKEY-LENGTH
+                             C-IMPORTKEY
+                             C-SOURCEKEY-LENGTH
+                             C-SOURCEKEY
+                             C-ASYM-ENCKEY-LENGTH
+                             C-ASYM-ENCKEY
+                             C-SYM-ENCKEY-LENGTH
+                             C-SYM-ENCKEY
+                             C-EXTRA-LENGTH
+                             C-EXTRA
+                             C-KCV-PARM-LENGTH
+                             C-KCV-PARM
+                             C-KCV-LENGTH
+                             C-KCV
+           END-CALL.
+
+           EXIT.
+
+      *****************************************************************
+       END PROGRAM DKMSRKX.

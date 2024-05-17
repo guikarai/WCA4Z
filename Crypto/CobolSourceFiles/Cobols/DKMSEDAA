@@ -1,0 +1,32 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID.    DKMSEDAA.
+      *****************************************************************
+      *                                                               *
+      * DKMSAPI PROGRAM - DKMSEDAA (DKMSEDA)                          *
+      *                                                               *
+      * This program is only used as a placeholder for the DKMSEDA    *
+      * program link-edited with DB2 language interface module for    *
+      * Call Attachment Facility (CAF) environments.                  *
+      *****************************************************************
+      * Version 02.00.00                                  Erik pauner *
+      *                                                               *
+      * Initial release of program but version no follows the package *
+      *                                                               *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+
+       LINKAGE SECTION.
+
+       COPY DDAV01.
+
+       PROCEDURE DIVISION USING DAPI-DDA-V01.
+
+       STEER SECTION.
+
+           CALL 'DKMSEDA' USING DAPI-DDA-V01.
+
+           GOBACK.
+
+       END PROGRAM DKMSEDAA.

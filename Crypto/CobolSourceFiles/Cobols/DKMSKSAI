@@ -1,0 +1,36 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID.    "DKMSKSAI".
+      *****************************************************************
+      *                                                               *
+      * DKMSAPI PROGRAM - DKMSKSAI (DKMSKSA)                          *
+      *                                                               *
+      * This program is only used as a placeholder for the DKMSKSA    *
+      * program link-edited with DB2 language interface module for    *
+      * IMS environments.                                             *
+      *                                                               *
+      *****************************************************************
+      * Version 01.02.00                                 Erik Pauner  *
+      *                                                               *
+      * Piggy bag program name to KSA-PROGRAM-NAME so main code       *
+      * knows DB2 invocation                                          *
+      *****************************************************************
+      * Version 01.00.00                                 Erik Pauner  *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+
+       LINKAGE SECTION.
+
+       COPY KSAV01.
+
+       PROCEDURE DIVISION USING DAPI-KSA-V01.
+
+       STEER SECTION.
+
+           MOVE 'DKMSKSAI' TO KSA-PROGRAM-NAME
+           CALL 'DKMSKSA' USING DAPI-KSA-V01.
+
+           GOBACK.
+
+       END PROGRAM "DKMSKSAI".

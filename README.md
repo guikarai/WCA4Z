@@ -1,2 +1,0 @@
-# WCA4Z
-WCA4Z
